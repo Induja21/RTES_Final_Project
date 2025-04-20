@@ -38,11 +38,14 @@ int main(int argc, char* argv[])
     initialize_zmq();
     Sequencer sequencer{};
   
-    sequencer.addService(messageQueueToCsvService, 1, 99, 300);
+
     // Add the producer service (runs every 250ms)
-    sequencer.addService(cursorTranslationService, 1, 98, 250);
-    sequencer.addService(imageCaptureService, 3, 97, 300);      // Captures images, 300ms
-    sequencer.addService(imageCompressionService, 2, 96, 500);  // Compresses images, 500ms
+    sequencer.addService(cursorTranslationService, 1, 99, 50);
+    sequencer.addService(imageCaptureService, 1, 98, 100);   
+    // To add ImageProcessing service   
+    sequencer.addService(imageCompressionService, 2, 96, 100);  
+    sequencer.addService(messageQueueToCsvService, 2, 95, 250);
+
     sequencer.startServices();
     while (_runningstate.load(std::memory_order_relaxed))
     {
