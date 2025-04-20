@@ -4,10 +4,6 @@
 #include <iomanip>
 #include <ctime>
 
-// Definition of the shared message queue and mutex
-std::queue<std::string> message_queue;
-std::mutex queue_mutex;
-
 // Mutex for CSV file access
 static std::mutex csv_mutex;
 
@@ -19,52 +15,50 @@ static bool initialized = false;
 void messageQueueToCsvService() {
     // Initialize CSV file with timestamp in filename if not already done
     if (!initialized) {
-        // Get current timestamp for filename
         struct timespec now;
-        clock_gettime(CLOCK_MONOTONIC, &now);
+        clock_gettime(CLOCK_REALTIME, &now);  // Use CLOCK_REALTIME for correct date/time
         std::time_t sec = now.tv_sec;
         std::stringstream filename;
         filename << "data_" << std::put_time(std::localtime(&sec), "%Y-%m-%dT%H-%M-%S") << ".csv";
-        csv_filename = filename.str(); // Store filename
+        csv_filename = filename.str();
 
-        // Open CSV file in append mode
         {
             std::lock_guard<std::mutex> lock(csv_mutex);
             csv_file.open(csv_filename, std::ios::app);
             if (!csv_file.is_open()) {
-                // Construct the error message
                 std::string error_message = "Failed to open CSV file: " + csv_filename;
                 std::puts(error_message.c_str());
                 return;
             }
-            // Write header
             csv_file << "timestamp,data\n";
         }
         initialized = true;
     }
 
-    // Check queue for data
+    // Get current timestamp for record
+    struct timespec now;
+    clock_gettime(CLOCK_MONOTONIC, &now);  // Use CLOCK_MONOTONIC for high-resolution timestamp
+    std::stringstream timestamp;
+    timestamp << now.tv_sec << "." << std::setw(9) << std::setfill('0') << now.tv_nsec;
+
+    // Check for data from ZeroMQ control socket
     std::string data;
-    {
-        std::lock_guard<std::mutex> lock(queue_mutex);
-        if (!message_queue.empty()) {
-            data = message_queue.front();
-            message_queue.pop();
-        }
+    zmq::message_t message;
+    if (zmq_pull_control_socket.recv(message, zmq::recv_flags::dontwait)) {  // Non-blocking
+        data = std::string(static_cast<char*>(message.data()), message.size());
     }
 
     // Append to CSV if data was found
     if (!data.empty() && csv_file.is_open()) {
         std::lock_guard<std::mutex> lock(csv_mutex);
-        csv_file << data << "\n";
-        // No flush() here to reduce I/O overhead
+        csv_file << timestamp.str() << "," << data << "\n";
     }
 }
-
 
 void flushCsvFile() {
     std::lock_guard<std::mutex> lock(csv_mutex);
     if (csv_file.is_open()) {
         csv_file.flush();
+        csv_file.close();
     }
 }

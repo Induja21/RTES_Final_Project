@@ -1,14 +1,14 @@
 #pragma once
 
-#include <queue>
-#include <mutex>
+#include <zmq.hpp>
 #include <string>
+#include "MessageQueue.hpp"
 
 // Declaration of the message queue service function
 void messageQueueToCsvService();
 
-void flushCsvFile();
+// Function to get the CSV filename
+std::string getCsvFileName();
 
-// Shared message queue and mutex
-extern std::queue<std::string> message_queue;
-extern std::mutex queue_mutex;
+// Function to flush the CSV file
+void flushCsvFile();
