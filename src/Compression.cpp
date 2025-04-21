@@ -6,7 +6,10 @@
 #include <ctime>
 #include <vector>
 #include <fstream>
-#include "base64.h"
+#include <linux/videodev2.h>
+#include <zmq.hpp>
+
+extern zmq::socket_t zmq_sub_socket_compress; // Changed to sub socket
 
 void imageCompressionService() {
     static bool folder_initialized = false;
@@ -15,38 +18,67 @@ void imageCompressionService() {
         folder_initialized = true;
     }
 
-    bool received_message = false;
     while (true) {
-        std::string encoded_data;
-        zmq::message_t message;
-        if (!zmq_pull_socket.recv(message, zmq::recv_flags::dontwait)) {
-            break;
+        // Receive the metadata (first part of the multi-part message)
+        zmq::message_t metadata_msg;
+        if (!zmq_sub_socket_compress.recv(metadata_msg, zmq::recv_flags::dontwait)) {
+            break; // No message available, exit loop
         }
 
-        received_message = true;
-        encoded_data = std::string(static_cast<char*>(message.data()), message.size());
-
-      //  std::fprintf(stderr, "Received encoded data size: %zu bytes\n", encoded_data.size());
-
-        std::vector<unsigned char> image_data = base64_decode(encoded_data);
-        if (image_data.empty()) {
-            std::fputs("Base64 decoding failed\n", stderr);
+        // Ensure the second part (frame data) is available
+        if (!metadata_msg.more()) {
+            std::fputs("Missing frame data part in ZMQ message\n", stderr);
             continue;
         }
 
-       // std::fprintf(stderr, "Decoded data size: %zu bytes\n", image_data.size());
+        // Extract metadata
+        struct FrameMetadata {
+            int width;
+            int height;
+            uint32_t format;
+            size_t data_size;
+        };
+        if (metadata_msg.size() != sizeof(FrameMetadata)) {
+            std::fputs("Invalid metadata size received\n", stderr);
+            continue;
+        }
+        FrameMetadata metadata;
+        memcpy(&metadata, metadata_msg.data(), sizeof(FrameMetadata));
 
-        if (image_data.size() < 1000) {
-            //std::fputs("Decoded data too small to be a valid image\n", stderr);
+        // Verify format
+        if (metadata.format != V4L2_PIX_FMT_YUYV) {
+            std::fprintf(stderr, "Unsupported frame format: %u\n", metadata.format);
             continue;
         }
 
-        cv::Mat image = cv::imdecode(image_data, cv::IMREAD_COLOR);
+        // Receive the raw frame data (second part)
+        zmq::message_t frame_msg;
+        if (!zmq_sub_socket_compress.recv(frame_msg, zmq::recv_flags::dontwait)) {
+            std::fputs("Failed to receive frame data\n", stderr);
+            continue;
+        }
+
+        if (frame_msg.size() != metadata.data_size) {
+            std::fprintf(stderr, "Frame data size mismatch: expected %zu, received %zu\n",
+                         metadata.data_size, frame_msg.size());
+            continue;
+        }
+
+        // Create a cv::Mat from the raw YUYV data
+        cv::Mat yuyv(metadata.height, metadata.width, CV_8UC2, frame_msg.data());
+        cv::Mat image;
+        try {
+            cv::cvtColor(yuyv, image, cv::COLOR_YUV2BGR_YUYV);
+        } catch (const cv::Exception& e) {
+            std::fprintf(stderr, "Color conversion failed: %s\n", e.what());
+            continue;
+        }
         if (image.empty()) {
-           // std::fputs("Failed to decode image data with cv::imdecode\n", stderr);
+            std::fputs("Failed to convert frame to BGR\n", stderr);
             continue;
         }
 
+        // Compress the image to JPEG
         std::vector<unsigned char> compressed_data;
         std::vector<int> compression_params = {cv::IMWRITE_JPEG_QUALITY, 80};
         if (!cv::imencode(".jpg", image, compressed_data, compression_params)) {
@@ -54,11 +86,13 @@ void imageCompressionService() {
             continue;
         }
 
+        // Generate a unique filename based on timestamp
         struct timespec now;
         clock_gettime(CLOCK_MONOTONIC, &now);
         std::stringstream filename;
         filename << "images/image_" << now.tv_sec << "." << std::setw(9) << std::setfill('0') << now.tv_nsec << ".jpg";
 
+        // Save the compressed image to file
         std::ofstream outfile(filename.str(), std::ios::binary);
         if (!outfile.is_open()) {
             std::string error_message = "Failed to open image file: " + filename.str() + "\n";
@@ -67,6 +101,5 @@ void imageCompressionService() {
         }
         outfile.write(reinterpret_cast<const char*>(compressed_data.data()), compressed_data.size());
         outfile.close();
-
     }
 }

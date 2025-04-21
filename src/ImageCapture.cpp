@@ -8,7 +8,11 @@
 #include <string>
 #include <cstring>
 #include <opencv2/opencv.hpp>
-#include "base64.h"
+#include <errno.h>
+
+static constexpr uint8_t NUM_OF_MEM_BUFFERS = 4;
+
+extern zmq::socket_t zmq_pub_socket; // Changed to pub socket
 
 void imageCaptureService() {
     static int fd = -1;
@@ -24,14 +28,14 @@ void imageCaptureService() {
         // Open the video device
         fd = open("/dev/video0", O_RDWR | O_NONBLOCK);
         if (fd == -1) {
-            std::fputs("Failed to open video device\n", stderr);
+            std::fprintf(stderr, "Failed to open video device: %s\n", strerror(errno));
             return;
         }
 
         // Query the camera's capabilities
         struct v4l2_capability cap;
         if (ioctl(fd, VIDIOC_QUERYCAP, &cap) == -1) {
-            std::fputs("Failed to query capabilities\n", stderr);
+            std::fprintf(stderr, "Failed to query capabilities: %s\n", strerror(errno));
             close(fd);
             return;
         }
@@ -40,17 +44,22 @@ void imageCaptureService() {
             close(fd);
             return;
         }
+        if (!(cap.capabilities & V4L2_CAP_STREAMING)) {
+            std::fputs("Device does not support streaming i/o\n", stderr);
+            close(fd);
+            return;
+        }
 
         // Set the format
         struct v4l2_format fmt;
         memset(&fmt, 0, sizeof(fmt));
         fmt.type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
-        fmt.fmt.pix.width = 640;  // Default, will be adjusted
+        fmt.fmt.pix.width = 640;
         fmt.fmt.pix.height = 480;
-        fmt.fmt.pix.pixelformat = V4L2_PIX_FMT_YUYV; // YUYV format
+        fmt.fmt.pix.pixelformat = V4L2_PIX_FMT_YUYV;
         fmt.fmt.pix.field = V4L2_FIELD_ANY;
         if (ioctl(fd, VIDIOC_S_FMT, &fmt) == -1) {
-            std::fputs("Failed to set format\n", stderr);
+            std::fprintf(stderr, "Failed to set format: %s\n", strerror(errno));
             close(fd);
             return;
         }
@@ -68,11 +77,11 @@ void imageCaptureService() {
         // Request buffers
         struct v4l2_requestbuffers req;
         memset(&req, 0, sizeof(req));
-        req.count = 1; // Single buffer for simplicity
+        req.count = NUM_OF_MEM_BUFFERS;
         req.type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
         req.memory = V4L2_MEMORY_MMAP;
         if (ioctl(fd, VIDIOC_REQBUFS, &req) == -1) {
-            std::fputs("Failed to request buffers\n", stderr);
+            std::fprintf(stderr, "Failed to request buffers: %s\n", strerror(errno));
             close(fd);
             return;
         }
@@ -83,7 +92,7 @@ void imageCaptureService() {
         buf.memory = V4L2_MEMORY_MMAP;
         buf.index = 0;
         if (ioctl(fd, VIDIOC_QUERYBUF, &buf) == -1) {
-            std::fputs("Failed to query buffer\n", stderr);
+            std::fprintf(stderr, "Failed to query buffer: %s\n", strerror(errno));
             close(fd);
             return;
         }
@@ -91,14 +100,14 @@ void imageCaptureService() {
         buffer_length = buf.length;
         buffer_start = mmap(NULL, buf.length, PROT_READ | PROT_WRITE, MAP_SHARED, fd, buf.m.offset);
         if (buffer_start == MAP_FAILED) {
-            std::fputs("Failed to map buffer\n", stderr);
+            std::fprintf(stderr, "Failed to map buffer: %s\n", strerror(errno));
             close(fd);
             return;
         }
 
         // Queue the buffer
         if (ioctl(fd, VIDIOC_QBUF, &buf) == -1) {
-            std::fputs("Failed to queue buffer\n", stderr);
+            std::fprintf(stderr, "Failed to queue buffer: %s\n", strerror(errno));
             munmap(buffer_start, buffer_length);
             close(fd);
             return;
@@ -107,7 +116,7 @@ void imageCaptureService() {
         // Start streaming
         enum v4l2_buf_type type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
         if (ioctl(fd, VIDIOC_STREAMON, &type) == -1) {
-            std::fputs("Failed to start streaming\n", stderr);
+            std::fprintf(stderr, "Failed to start streaming: %s\n", strerror(errno));
             munmap(buffer_start, buffer_length);
             close(fd);
             return;
@@ -128,52 +137,41 @@ void imageCaptureService() {
             // No frame available yet, return without blocking
             return;
         }
-        std::fputs("Failed to dequeue buffer\n", stderr);
+        std::fprintf(stderr, "Failed to dequeue buffer: %s\n", strerror(errno));
         return;
     }
 
-    // Convert YUYV to BGR
-    cv::Mat yuyv(height, width, CV_8UC2, buffer_start);
-    cv::Mat frame;
-    try {
-        cv::cvtColor(yuyv, frame, cv::COLOR_YUV2BGR_YUYV); // Use the correct conversion code
-    } catch (const cv::Exception& e) {
-        std::fprintf(stderr, "Color conversion failed: %s\n", e.what());
-        ioctl(fd, VIDIOC_QBUF, &buf);
-        return;
-    }
-    if (frame.empty()) {
-        std::fputs("Failed to convert frame\n", stderr);
-        // Re-queue the buffer
-        ioctl(fd, VIDIOC_QBUF, &buf);
-        return;
-    }
+    // Send the raw frame data via ZMQ (non-blocking)
+    // First, send metadata (width, height, format) as a header
+    struct FrameMetadata {
+        int width;
+        int height;
+        uint32_t format;
+        size_t data_size;
+    };
+    FrameMetadata metadata = {width, height, V4L2_PIX_FMT_YUYV, buf.bytesused};
 
-    // Encode the frame as JPEG
-    std::vector<uchar> buffer;
-    if (!cv::imencode(".jpg", frame, buffer)) {
-        std::fputs("Failed to encode frame\n", stderr);
-        // Re-queue the buffer
+    // Send metadata as the first part of a multi-part message
+    zmq::message_t metadata_msg(sizeof(FrameMetadata));
+    memcpy(metadata_msg.data(), &metadata, sizeof(FrameMetadata));
+    if (!zmq_pub_socket.send(metadata_msg, zmq::send_flags::sndmore | zmq::send_flags::dontwait)) {
+        std::fputs("Failed to send metadata via ZMQ\n", stderr);
         ioctl(fd, VIDIOC_QBUF, &buf);
         return;
     }
 
-    // Base64 encode the buffer
-    std::string encoded = base64_encode(buffer);
-
-    // Send the encoded data via ZMQ (non-blocking with dontwait)
-    zmq::message_t msg(encoded.size());
-    memcpy(msg.data(), encoded.data(), encoded.size());
-    if (!zmq_push_socket.send(msg, zmq::send_flags::dontwait)) {
-        std::fputs("Failed to send message via ZMQ\n", stderr);
-        // Re-queue the buffer
+    // Send the raw frame data as the second part
+    zmq::message_t frame_msg(buf.bytesused);
+    memcpy(frame_msg.data(), buffer_start, buf.bytesused);
+    if (!zmq_pub_socket.send(frame_msg, zmq::send_flags::dontwait)) {
+        std::fputs("Failed to send raw frame data via ZMQ\n", stderr);
         ioctl(fd, VIDIOC_QBUF, &buf);
         return;
     }
 
     // Re-queue the buffer for the next capture
     if (ioctl(fd, VIDIOC_QBUF, &buf) == -1) {
-        std::fputs("Failed to re-queue buffer\n", stderr);
+        std::fprintf(stderr, "Failed to re-queue buffer: %s\n", strerror(errno));
         return;
     }
 }

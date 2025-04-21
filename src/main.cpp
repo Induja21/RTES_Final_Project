@@ -18,6 +18,7 @@
 #include "ImageCapture.hpp"
 #include "Compression.hpp"
 #include "MessageQueue.hpp"
+#include "ImageProcessing.hpp"
 
 std::atomic<bool> _runningstate{true};
 
@@ -42,7 +43,7 @@ int main(int argc, char* argv[])
     // Add the producer service (runs every 250ms)
     sequencer.addService(cursorTranslationService, 1, 99, 50);
     sequencer.addService(imageCaptureService, 1, 98, 100);   
-    // To add ImageProcessing service   
+    sequencer.addService(eyeDetectionService, 2, 97, 100); 
     sequencer.addService(imageCompressionService, 2, 96, 100);  
     sequencer.addService(messageQueueToCsvService, 2, 95, 250);
 
