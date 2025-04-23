@@ -1,0 +1,8 @@
+# Ignore images folder
+images/
+
+# Ignore .o files
+*.o
+
+# Ignore .csv files
+*.csv
