@@ -11,6 +11,9 @@
 // Static counter for unique message IDs
 static int message_counter = 0;
 static int fd = 0;
+#define DISPLAY_X 1920
+#define DISPLAY_Y 1080
+
 uint8_t cursorInit()
 {
     fd = open("/dev/uinput", O_WRONLY | O_NONBLOCK);
@@ -39,9 +42,9 @@ uint8_t cursorInit()
     
     // Set ABS_X and ABS_Y ranges (based on screen size — adjust if needed)
     uidev.absmin[ABS_X] = 0;
-    uidev.absmax[ABS_X] = 1920;
+    uidev.absmax[ABS_X] = DISPLAY_X;
     uidev.absmin[ABS_Y] = 0;
-    uidev.absmax[ABS_Y] = 1080;
+    uidev.absmax[ABS_Y] = DISPLAY_Y;
     
     write(fd, &uidev, sizeof(uidev));
     
@@ -83,11 +86,11 @@ void cursorTranslationService() {
     
     ev.type = EV_ABS;
     ev.code = ABS_X;
-    ev.value = 1900;
+    ev.value = DISPLAY_X - 20;
     write(fd, &ev, sizeof(ev));
     
     ev.code = ABS_Y;
-    ev.value = 1060;
+    ev.value = DISPLAY_Y - 20;
     write(fd, &ev, sizeof(ev));
     
     // Synchronize
