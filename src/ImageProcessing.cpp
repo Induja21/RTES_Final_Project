@@ -146,7 +146,17 @@ void eyeDetection(Mat& frame, CascadeClassifier& faceCascade, CascadeClassifier&
         int radius = (int)eyeball[2];
         circle(frame, storedFaces[0].tl() + eyeRect.tl() + center, radius, Scalar(0, 0, 255), 2);
         circle(eye, center, radius, Scalar(255, 255, 255), 2);
-        cout << "Eyeball location: " << track_Eyeball << endl;
+        //cout << "Eyeball location: " << track_Eyeball << endl;
+
+        // Serialize the eyeball data (x, y) to a string
+        std::ostringstream oss;
+        oss << track_Eyeball.x << " " << track_Eyeball.y;
+
+        // Send it as a ZMQ message
+        std::string msg_str = oss.str();
+        zmq::message_t msg(msg_str.size());
+        memcpy(msg.data(), msg_str.data(), msg_str.size());
+        zmq_push_eyeball_socket.send(msg, zmq::send_flags::none);
     }
 
 
@@ -242,8 +252,8 @@ void eyeDetectionService() {
         delta_t(&finish_time, &start_time, &thread_dt);
 
         char buffer[100];
-        sprintf(buffer, "Timing for eye detection: %ld sec, %ld msec, %ld usec\n",
-                thread_dt.tv_sec, (thread_dt.tv_nsec / NSEC_PER_MSEC), (thread_dt.tv_nsec / NSEC_PER_MICROSEC));
-        puts(buffer);
+        // sprintf(buffer, "Timing for eye detection: %ld sec, %ld msec, %ld usec\n",
+        //         thread_dt.tv_sec, (thread_dt.tv_nsec / NSEC_PER_MSEC), (thread_dt.tv_nsec / NSEC_PER_MICROSEC));
+        // puts(buffer);
     }
 }
