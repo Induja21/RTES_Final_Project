@@ -1,6 +1,5 @@
 #include "CursorTranslation.hpp"
 #include "Logging.hpp"
-
 #include <sstream>
 #include <iomanip>
 #include <ctime>
@@ -8,14 +7,19 @@
 #include <linux/uinput.h>
 #include <X11/Xlib.h>
 #include "MessageQueue.hpp"
-// Static counter for unique message IDs
+
 static int message_counter = 0;
 static int fd = 0;
 #define DISPLAY_X 1920
 #define DISPLAY_Y 1080
+#define CAMERA_X 640 // Camera width
+#define CAMERA_Y 480 // Camera height
+#define FACE_X_MIN 200 // Estimated min x-coordinate of face center (60 deg left)
+#define FACE_X_MAX 440 // Estimated max x-coordinate of face center (60 deg right)
+#define FACE_Y_MIN 120 // Estimated min y-coordinate of face center
+#define FACE_Y_MAX 360 // Estimated max y-coordinate of face center
 
-uint8_t cursorInit()
-{
+uint8_t cursorInit() {
     fd = open("/dev/uinput", O_WRONLY | O_NONBLOCK);
     if (fd < 0) {
         std::cerr << "Failed to open /dev/uinput\n";
@@ -40,7 +44,7 @@ uint8_t cursorInit()
     uidev.id.product = 0x5678;
     uidev.id.version = 1;
     
-    // Set ABS_X and ABS_Y ranges (based on screen size — adjust if needed)
+    // Set ABS_X and ABS_Y ranges
     uidev.absmin[ABS_X] = 0;
     uidev.absmax[ABS_X] = DISPLAY_X;
     uidev.absmin[ABS_Y] = 0;
@@ -53,11 +57,10 @@ uint8_t cursorInit()
         return 1;
     }
     
-    sleep(2); // Let device initialize
+    return 0;
 }
 
-void cursorDeinit()
-{
+void cursorDeinit() {
     ioctl(fd, UI_DEV_DESTROY);
     close(fd);
 }
@@ -69,40 +72,59 @@ void cursorTranslationService() {
     std::stringstream message;
     message << "ProducerMsg_" << message_counter++ << "_" << now.tv_sec << "." << std::setw(9) << std::setfill('0') << now.tv_nsec;
 
-    zmq::message_t eyeball_msg;
-    if (zmq_pull_eyeball_socket.recv(eyeball_msg, zmq::recv_flags::dontwait)) {
-        std::string received_str(static_cast<char*>(eyeball_msg.data()), eyeball_msg.size());
-        std::cout << "Received eyeball data: " << received_str << std::endl;
+    // Receive face center coordinates
+    zmq::message_t face_msg;
+    if (zmq_pull_face_socket.recv(face_msg, zmq::recv_flags::dontwait)) {
+        std::string received_str(static_cast<char*>(face_msg.data()), face_msg.size());
+        std::cout << "Received face center data: " << received_str << std::endl;
 
-        // Optionally parse it
-        int x, y, r;
-        sscanf(received_str.c_str(), "Eyeball:%d,%d,%d", &x, &y, &r);
-        std::cout << "Parsed: x=" << x << ", y=" << y << ", r=" << r << std::endl;
+        // Parse the face center coordinates
+        int x, y;
+        if (sscanf(received_str.c_str(), "FaceCenter:%d,%d", &x, &y) == 2) {
+            std::cout << "Parsed: x=" << x << ", y=" << y << std::endl;
+
+            // Invert x-coordinate to correct for mirrored camera image
+            x = CAMERA_X - x;
+
+            // Normalize coordinates to [0, 1] based on face movement range
+            float norm_x = static_cast<float>(x - FACE_X_MIN) / (FACE_X_MAX - FACE_X_MIN);
+            float norm_y = static_cast<float>(y - FACE_Y_MIN) / (FACE_Y_MAX - FACE_Y_MIN);
+
+            // Map normalized coordinates to display coordinates
+            int display_x = static_cast<int>(norm_x * DISPLAY_X);
+            int display_y = static_cast<int>(norm_y * DISPLAY_Y);
+
+            // Ensure coordinates are within display bounds
+            display_x = std::max(0, std::min(display_x, DISPLAY_X));
+            display_y = std::max(0, std::min(display_y, DISPLAY_Y));
+
+            // Move cursor using uinput
+            struct input_event ev;
+            memset(&ev, 0, sizeof(ev));
+            gettimeofday(&ev.time, nullptr);
+
+            ev.type = EV_ABS;
+            ev.code = ABS_X;
+            ev.value = display_x;
+            write(fd, &ev, sizeof(ev));
+
+            ev.code = ABS_Y;
+            ev.value = display_y;
+            write(fd, &ev, sizeof(ev));
+
+            // Synchronize
+            ev.type = EV_SYN;
+            ev.code = SYN_REPORT;
+            ev.value = 0;
+            write(fd, &ev, sizeof(ev));
+        } else {
+            std::cerr << "Failed to parse face center data: " << received_str << std::endl;
+        }
     }
-    
-    struct input_event ev;
-    memset(&ev, 0, sizeof(ev));
-    gettimeofday(&ev.time, nullptr);
-    
-    ev.type = EV_ABS;
-    ev.code = ABS_X;
-    ev.value = DISPLAY_X - 20;
-    write(fd, &ev, sizeof(ev));
-    
-    ev.code = ABS_Y;
-    ev.value = DISPLAY_Y - 20;
-    write(fd, &ev, sizeof(ev));
-    
-    // Synchronize
-    ev.type = EV_SYN;
-    ev.code = SYN_REPORT;
-    ev.value = 0;
-    write(fd, &ev, sizeof(ev));
 
-    // Send message via ZeroMQ
+    // Send message via ZeroMQ (unchanged)
     std::string msg_str = message.str();
     zmq::message_t msg(msg_str.size());
     memcpy(msg.data(), msg_str.data(), msg_str.size());
-    // Non-blocking with dontwait
     zmq_push_control_socket.send(msg, zmq::send_flags::dontwait);  
 }

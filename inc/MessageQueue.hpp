@@ -12,7 +12,7 @@ extern zmq::socket_t zmq_pull_socket;  // Used by imageCompressionService to rec
 extern zmq::socket_t zmq_push_control_socket;  // Used for sending timestamp to LoggingService
 extern zmq::socket_t zmq_pull_control_socket;  // Used by Logging to receive the messages sent to this service
 
-extern zmq::socket_t zmq_push_eyeball_socket;
-extern zmq::socket_t zmq_pull_eyeball_socket;
+extern zmq::socket_t zmq_push_face_socket;
+extern zmq::socket_t zmq_pull_face_socket;
 void initialize_zmq();
 void cleanup_zmq();

@@ -14,6 +14,6 @@
 #define NSEC_PER_MSEC (1000000)
 #define NSEC_PER_MICROSEC (1000)
 
-void eyeDetectionService();
+void faceCenterDetectionService();
 
 #endif // EYE_DETECTION_HPP

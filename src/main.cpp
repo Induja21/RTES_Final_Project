@@ -44,12 +44,6 @@ int main(int argc, char* argv[])
     cursorInit();    
 
 
-    
-    std::cout << "Moved to top-left corner.\n";
-    
-    sleep(5); // Keep device alive for testing
-    
-
 
     initialize_zmq();
     Sequencer sequencer{};
@@ -58,7 +52,7 @@ int main(int argc, char* argv[])
     // Add the producer service (runs every 250ms)
     sequencer.addService(cursorTranslationService, 1, 99, 50);
     sequencer.addService(imageCaptureService, 1, 98, 100);   
-    sequencer.addService(eyeDetectionService, 2, 97, 100); 
+    sequencer.addService(faceCenterDetectionService, 2, 97, 100); 
     sequencer.addService(imageCompressionService, 2, 96, 100);  
     sequencer.addService(messageQueueToCsvService, 2, 95, 250);
 

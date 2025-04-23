@@ -1,11 +1,16 @@
 #include "ImageProcessing.hpp"
 #include <linux/videodev2.h>
 #include <iostream>
+#include <zmq.hpp>
 
 using namespace cv;
 using namespace std;
 
-extern zmq::socket_t zmq_sub_socket_eye; // Changed to sub socket
+extern zmq::socket_t zmq_sub_socket_face; // ZMQ subscriber socket for frame input
+extern zmq::socket_t zmq_push_face_socket; // ZMQ push socket to send face center
+
+#define NSEC_PER_MSEC 1000000
+#define NSEC_PER_MICROSEC 1000
 
 int delta_t(struct timespec *stop, struct timespec *start, struct timespec *delta_t) {
     int dt_sec = stop->tv_sec - start->tv_sec;
@@ -31,150 +36,48 @@ int delta_t(struct timespec *stop, struct timespec *start, struct timespec *delt
     return 1;
 }
 
-Vec3f eyeBallDetection(Mat& eye, vector<Vec3f>& circles) {
-    vector<int> sums(circles.size(), 0);
-    for (int y = 0; y < eye.rows; y++) {
-        uchar* data = eye.ptr<uchar>(y);
-        for (int x = 0; x < eye.cols; x++) {
-            int pixel_value = static_cast<int>(*data);
-            for (int i = 0; i < circles.size(); i++) {
-                Point center((int)round(circles[i][0]), (int)round(circles[i][1]));
-                int radius = (int)round(circles[i][2]);
-                if (pow(x - center.x, 2) + pow(y - center.y, 2) < pow(radius, 2)) {
-                    sums[i] += pixel_value;
-                }
-            }
-            ++data;
-        }
-    }
-    int smallestSum = 9999999;
-    int smallestSumIndex = -1;
-    for (int i = 0; i < circles.size(); i++) {
-        if (sums[i] < smallestSum) {
-            smallestSum = sums[i];
-            smallestSumIndex = i;
-        }
-    }
-    return circles[smallestSumIndex];
-}
-
-Rect detectLeftEye(vector<Rect>& eyes) {
-    int leftEye = 99999999;
-    int index = 0;
-    for (int i = 0; i < eyes.size(); i++) {
-        if (eyes[i].tl().x < leftEye) {
-            leftEye = eyes[i].tl().x;
-            index = i;
-        }
-    }
-    return eyes[index];
-}
-
-vector<Point> centers;
-Point track_Eyeball;
-Point makeStable(vector<Point>& points, int iteration) {
-    float sum_of_X = 0, sum_of_Y = 0;
-    int count = 0;
-    int j = max(0, (int)(points.size() - iteration));
-    int number_of_points = points.size();
-    for (; j < number_of_points; j++) {
-        sum_of_X += points[j].x;
-        sum_of_Y += points[j].y;
-        ++count;
-    }
-    if (count > 0) {
-        sum_of_X /= count;
-        sum_of_Y /= count;
-    }
-    return Point(sum_of_X, sum_of_Y);
-}
-
-void eyeDetection(Mat& frame, CascadeClassifier& faceCascade, CascadeClassifier& eyeCascade) {
+void faceCenterDetection(Mat& frame, CascadeClassifier& faceCascade, Point& faceCenter) {
     Mat grayImage;
     cvtColor(frame, grayImage, COLOR_BGR2GRAY);
     equalizeHist(grayImage, grayImage);
 
     // Detect faces
-    Mat inputImage = grayImage;
     vector<Rect> storedFaces;
     float scaleFactor = 1.1;
     int minimumNeighbour = 2;
     Size minImageSize = Size(150, 150);
-    faceCascade.detectMultiScale(inputImage, storedFaces, scaleFactor, minimumNeighbour, 0 | CASCADE_SCALE_IMAGE, minImageSize);
-    if (storedFaces.empty()) return;
+    faceCascade.detectMultiScale(grayImage, storedFaces, scaleFactor, minimumNeighbour, 0 | CASCADE_SCALE_IMAGE, minImageSize);
+    if (storedFaces.empty()) {
+        faceCenter = Point(-1, -1); // Indicate no face detected
+        return;
+    }
 
-    Mat face = grayImage(storedFaces[0]);
-    int x = storedFaces[0].x;
-    int y = storedFaces[0].y;
-    int h = y + storedFaces[0].height;
-    int w = x + storedFaces[0].width;
+    // Process the first detected face
+    Rect faceRect = storedFaces[0];
+    int x = faceRect.x;
+    int y = faceRect.y;
+    int h = y + faceRect.height;
+    int w = x + faceRect.width;
     rectangle(frame, Point(x, y), Point(w, h), Scalar(255, 0, 255), 2, 8, 0);
 
-    // Detect eyes
-    vector<Rect> eyes;
-    float eyeScaleFactor = 1.1;
-    int eyeMinimumNeighbour = 2;
-    Size eyeMinImageSize = Size(30, 30);
-    eyeCascade.detectMultiScale(face, eyes, eyeScaleFactor, eyeMinimumNeighbour, 0 | CASCADE_SCALE_IMAGE, eyeMinImageSize);
-    if (eyes.size() != 2) return;
+    // Calculate the center of the face
+    faceCenter = Point(faceRect.x + faceRect.width / 2, faceRect.y + faceRect.height / 2);
 
-    for (Rect& eye : eyes) {
-        rectangle(frame, storedFaces[0].tl() + eye.tl(), storedFaces[0].tl() + eye.br(), Scalar(0, 255, 0), 2);
-    }
+    // Draw a circle at the center of the face
+    int radius = faceRect.width / 8;
+    circle(frame, faceCenter, radius, Scalar(0, 0, 255), 2);
 
-    // Detect left eye and eyeball
-    Rect eyeRect = detectLeftEye(eyes);
-    Mat eye = face(eyeRect);
-    equalizeHist(eye, eye);
-
-    vector<Vec3f> circles;
-    int method = 3;
-    int detect_Pixel = 1;
-    int minimum_Distance = eye.cols / 8;
-    int threshold = 250;
-    int minimum_Area = 15;
-    int minimum_Radius = eye.rows / 8;
-    int maximum_Radius = eye.rows / 3;
-    HoughCircles(eye, circles, HOUGH_GRADIENT, detect_Pixel, minimum_Distance, threshold, minimum_Area, minimum_Radius, maximum_Radius);
-
-    if (circles.size()>0) {
-        Vec3f eyeball = eyeBallDetection(eye, circles);
-        Point center(eyeball[0], eyeball[1]);
-        centers.push_back(center);
-        center = makeStable(centers, 5);
-        track_Eyeball = center;
-        int radius = (int)eyeball[2];
-        circle(frame, storedFaces[0].tl() + eyeRect.tl() + center, radius, Scalar(0, 0, 255), 2);
-        circle(eye, center, radius, Scalar(255, 255, 255), 2);
-        //cout << "Eyeball location: " << track_Eyeball << endl;
-
-        // Serialize the eyeball data (x, y) to a string
-        std::ostringstream oss;
-        oss << track_Eyeball.x << " " << track_Eyeball.y;
-
-        // Send it as a ZMQ message
-        std::string msg_str = oss.str();
-        zmq::message_t msg(msg_str.size());
-        memcpy(msg.data(), msg_str.data(), msg_str.size());
-        zmq_push_eyeball_socket.send(msg, zmq::send_flags::none);
-    }
-
-
+    cout << "Face center location: " << faceCenter << endl;
 }
 
-void eyeDetectionService() {
+void faceCenterDetectionService() {
     static bool initialized = false;
     static CascadeClassifier faceCascade;
-    static CascadeClassifier eyeCascade;
 
-    // Initialize classifiers
+    // Initialize face classifier
     if (!initialized) {
         if (!faceCascade.load("/usr/share/opencv4/haarcascades/haarcascade_frontalface_alt.xml")) {
             cerr << "Failed to load face cascade classifier" << endl;
-            return;
-        }
-        if (!eyeCascade.load("/usr/share/opencv4/haarcascades/haarcascade_eye.xml")) {
-            cerr << "Failed to load eye cascade classifier" << endl;
             return;
         }
         initialized = true;
@@ -184,7 +87,7 @@ void eyeDetectionService() {
     while (true) {
         // Receive the metadata (first part of the multi-part message)
         zmq::message_t metadata_msg;
-        if (!zmq_sub_socket_eye.recv(metadata_msg, zmq::recv_flags::dontwait)) {
+        if (!zmq_sub_socket_face.recv(metadata_msg, zmq::recv_flags::dontwait)) {
             break; // No message available, exit loop
         }
 
@@ -216,7 +119,7 @@ void eyeDetectionService() {
 
         // Receive the raw frame data (second part)
         zmq::message_t frame_msg;
-        if (!zmq_sub_socket_eye.recv(frame_msg, zmq::recv_flags::dontwait)) {
+        if (!zmq_sub_socket_face.recv(frame_msg, zmq::recv_flags::dontwait)) {
             cerr << "Failed to receive frame data" << endl;
             continue;
         }
@@ -241,19 +144,30 @@ void eyeDetectionService() {
             continue;
         }
 
-        // Perform eye detection
+        // Perform face center detection
         struct timespec start_time = {0, 0};
         struct timespec finish_time = {0, 0};
         struct timespec thread_dt = {0, 0};
 
         clock_gettime(CLOCK_MONOTONIC, &start_time);
-        eyeDetection(frame, faceCascade, eyeCascade);
+        Point faceCenter;
+        faceCenterDetection(frame, faceCascade, faceCenter);
         clock_gettime(CLOCK_MONOTONIC, &finish_time);
         delta_t(&finish_time, &start_time, &thread_dt);
 
+        // Send face center coordinates via ZeroMQ
+        if (faceCenter.x >= 0 && faceCenter.y >= 0) {
+            char buffer[50];
+            snprintf(buffer, sizeof(buffer), "FaceCenter:%d,%d", faceCenter.x, faceCenter.y);
+            zmq::message_t msg(buffer, strlen(buffer));
+            zmq_push_face_socket.send(msg, zmq::send_flags::dontwait);
+        }
+
         char buffer[100];
-        // sprintf(buffer, "Timing for eye detection: %ld sec, %ld msec, %ld usec\n",
-        //         thread_dt.tv_sec, (thread_dt.tv_nsec / NSEC_PER_MSEC), (thread_dt.tv_nsec / NSEC_PER_MICROSEC));
-        // puts(buffer);
+        sprintf(buffer, "Timing for face center detection: %ld sec, %ld msec, %ld usec\n",
+                thread_dt.tv_sec, (thread_dt.tv_nsec / NSEC_PER_MSEC), (thread_dt.tv_nsec / NSEC_PER_MICROSEC));
+        puts(buffer);
+        imshow("Webcam", frame);
+        if (waitKey(30) >= 0) break;
     }
 }
