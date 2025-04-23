@@ -5,7 +5,7 @@ CXX = g++
 CXXFLAGS = --std=c++23 -Wall -pedantic -Iinc $(shell pkg-config --cflags opencv4)
 
 # Linker flags (e.g., for pthreads)
-LDFLAGS = -lpthread $(shell pkg-config --libs opencv4) -lzmq
+LDFLAGS = -lpthread $(shell pkg-config --libs opencv4) -lzmq -lX11 -ludev
 
 # Target executable name
 TARGET = faceDetection

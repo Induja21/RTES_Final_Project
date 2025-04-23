@@ -95,11 +95,12 @@ void eyeDetection(Mat& frame, CascadeClassifier& faceCascade, CascadeClassifier&
     equalizeHist(grayImage, grayImage);
 
     // Detect faces
+    Mat inputImage = grayImage;
     vector<Rect> storedFaces;
     float scaleFactor = 1.1;
     int minimumNeighbour = 2;
     Size minImageSize = Size(150, 150);
-    faceCascade.detectMultiScale(grayImage, storedFaces, scaleFactor, minimumNeighbour, 0 | CASCADE_SCALE_IMAGE, minImageSize);
+    faceCascade.detectMultiScale(inputImage, storedFaces, scaleFactor, minimumNeighbour, 0 | CASCADE_SCALE_IMAGE, minImageSize);
     if (storedFaces.empty()) return;
 
     Mat face = grayImage(storedFaces[0]);
@@ -136,7 +137,7 @@ void eyeDetection(Mat& frame, CascadeClassifier& faceCascade, CascadeClassifier&
     int maximum_Radius = eye.rows / 3;
     HoughCircles(eye, circles, HOUGH_GRADIENT, detect_Pixel, minimum_Distance, threshold, minimum_Area, minimum_Radius, maximum_Radius);
 
-    if (!circles.empty()) {
+    if (circles.size()>0) {
         Vec3f eyeball = eyeBallDetection(eye, circles);
         Point center(eyeball[0], eyeball[1]);
         centers.push_back(center);
@@ -147,6 +148,8 @@ void eyeDetection(Mat& frame, CascadeClassifier& faceCascade, CascadeClassifier&
         circle(eye, center, radius, Scalar(255, 255, 255), 2);
         cout << "Eyeball location: " << track_Eyeball << endl;
     }
+
+
 }
 
 void eyeDetectionService() {
