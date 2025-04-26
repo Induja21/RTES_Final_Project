@@ -124,8 +124,117 @@ void eyeDetection(Mat& frame, CascadeClassifier& faceCascade, CascadeClassifier&
 
     // Detect left eye and eyeball
     Rect eyeRect = detectLeftEye(eyes);
-    Mat eye = face(eyeRect);
+    // Calculate the middle third rectangle
+    int thirdheight = eyeRect.height/ 3;
+    Rect middleThird(
+       eyeRect.x,     // start from 1/3rd into the eyeRect
+       eyeRect.y + thirdheight,                  // same top
+       eyeRect.width,                 // width is 1/3rd
+       thirdheight              // full height
+    );
+
+    // Extract the middle third from the face
+    Mat eye = face(middleThird);
+    //Mat eye = face(eyeRect);
     equalizeHist(eye, eye);
+
+
+    GaussianBlur(eye, eye, Size(7, 7), 0);
+
+    // Now apply threshold to get binary image
+    Mat threshEye;
+    threshold(eye, threshEye, 70, 255, THRESH_BINARY);
+
+    // Now extract left and right halves from the binary eye
+    int width = threshEye.cols;
+    int height = threshEye.rows;
+    Mat leftEye = threshEye(Rect(0, 0, width / 2, height));
+    Mat rightEye = threshEye(Rect(width / 2, 0, width / 2, height));
+    Mat topHalf = threshEye(Rect(0, 0, width, height / 2));
+    Mat bottomHalf = threshEye(Rect(0, height / 2, width, height - height / 2));
+    // 1. Apply Adaptive Thresholding
+    // Mat leftEyeAdaptive, rightEyeAdaptive;
+    // adaptiveThreshold(leftEye, leftEyeAdaptive, 255, ADAPTIVE_THRESH_MEAN_C, THRESH_BINARY, 11, 2);
+    // adaptiveThreshold(rightEye, rightEyeAdaptive, 255, ADAPTIVE_THRESH_MEAN_C, THRESH_BINARY, 11, 2);
+
+    // 2. Apply Gaussian Blurring before Thresholding (Gaussian Thresholding)
+    Mat leftEyeGaussian, rightEyeGaussian;
+    GaussianBlur(leftEye, leftEyeGaussian, Size(7, 7), 0);
+    GaussianBlur(rightEye, rightEyeGaussian, Size(7, 7), 0);
+
+    // After smoothing, apply a simple threshold
+    cv::threshold(leftEyeGaussian, leftEyeGaussian, 70, 255, THRESH_BINARY);
+    cv::threshold(rightEyeGaussian, rightEyeGaussian, 70, 255, THRESH_BINARY);
+
+    // Step 5: Apply Gaussian Blur + Thresholding
+    Mat topGaussian, bottomGaussian;
+    GaussianBlur(topHalf, topGaussian, Size(7, 7), 0);
+    GaussianBlur(bottomHalf, bottomGaussian, Size(7, 7), 0);
+    threshold(topGaussian, topGaussian, 70, 255, THRESH_BINARY);
+    threshold(bottomGaussian, bottomGaussian, 70, 255, THRESH_BINARY);
+
+    // Visualize the thresholded images
+    // imshow("Left Eye Adaptive Thresholded", leftEyeAdaptive);
+    // imshow("Right Eye Adaptive Thresholded", rightEyeAdaptive);
+
+    // imshow("Left Eye Gaussian Thresholded", leftEyeGaussian);
+    // imshow("Right Eye Gaussian Thresholded", rightEyeGaussian);
+
+    // Count the number of white pixels (sclera) in both eyes
+    // int leftWhiteAdaptive = countNonZero(leftEyeAdaptive);
+    // int rightWhiteAdaptive = countNonZero(rightEyeAdaptive);
+
+    int leftWhiteGaussian = countNonZero(leftEyeGaussian);
+    int rightWhiteGaussian = countNonZero(rightEyeGaussian);
+
+    int topWhiteGaussian = countNonZero(topGaussian);
+    int bottomWhiteGaussian = countNonZero(bottomGaussian);
+
+    // Step 7: Calculate gaze ratio for up/down
+    //double gazeRatioUpDownAdaptive = bottomWhiteAdaptive == 0 ? 1e6 : (double)topWhiteAdaptive / bottomWhiteAdaptive;
+    double gazeRatioUpDownGaussian = bottomWhiteGaussian == 0 ? 1e6 : (double)topWhiteGaussian / bottomWhiteGaussian;
+
+    std::cout << "Gaussian UD Gaze Ratio: " << gazeRatioUpDownGaussian << std::endl;
+
+
+    // // Calculate gaze ratio using adaptive threshold
+    // double gazeRatioAdaptive = 0;
+    // if (rightWhiteAdaptive == 0)
+    //    gazeRatioAdaptive = 3; // Looking right (no sclera in the right eye)
+    // else if (leftWhiteAdaptive == 0)
+    //    gazeRatioAdaptive = 1; // Looking left (no sclera in the left eye)
+    // else
+    //    gazeRatioAdaptive = static_cast<double>(leftWhiteAdaptive) / rightWhiteAdaptive; // Ratio of sclera in left vs right
+
+    // cout << "Gaze Ratio (Adaptive): " << gazeRatioAdaptive << endl;
+
+    // Calculate gaze ratio using Gaussian threshold
+    double gazeRatioGaussian = 0;
+    if (rightWhiteGaussian == 0)
+      gazeRatioGaussian = 3; // Looking right (no sclera in the right eye)
+    else if (leftWhiteGaussian == 0)
+      gazeRatioGaussian = 1; // Looking left (no sclera in the left eye)
+    else
+      gazeRatioGaussian = static_cast<double>(leftWhiteGaussian) / rightWhiteGaussian; // Ratio of sclera in left vs right
+
+    string gazeDirection;
+    if (gazeRatioGaussian > 1.15)
+      gazeDirection = "Looking Left";
+    else if (gazeRatioGaussian < 0.85)
+      gazeDirection = "Looking Right";
+    else
+      gazeDirection = "Looking Center";
+
+    cout << "Gaze: " << gazeDirection << " (" << gazeRatioGaussian << ")" << endl;
+    string gazeUpDn;
+    if (gazeRatioUpDownGaussian > 1.1)
+      gazeUpDn = "Looking Down";
+    else if (gazeRatioUpDownGaussian < 0.95)
+      gazeUpDn = "Looking Up";
+    else
+      gazeUpDn = "Looking Center";
+
+    cout << "Gaze: " << gazeUpDn << " (" << gazeRatioUpDownGaussian << ")" << endl;
 
     vector<Vec3f> circles;
     int method = 3;
@@ -149,8 +258,11 @@ void eyeDetection(Mat& frame, CascadeClassifier& faceCascade, CascadeClassifier&
         //cout << "Eyeball location: " << track_Eyeball << endl;
 
         // Serialize the eyeball data (x, y) to a string
+        // Map x from [0.8, 1.1] to [0, 1920]
+        
         std::ostringstream oss;
-        oss << track_Eyeball.x << " " << track_Eyeball.y;
+        oss << std::fixed << std::setprecision(2) << gazeRatioGaussian << " " << gazeRatioUpDownGaussian;
+
 
         // Send it as a ZMQ message
         std::string msg_str = oss.str();

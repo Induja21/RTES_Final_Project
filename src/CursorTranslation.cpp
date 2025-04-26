@@ -62,6 +62,15 @@ void cursorDeinit()
     close(fd);
 }
 
+int mapX(double x) {
+            return (int)((x - 1.2) / (0.8 - 1.2) * 1920.0);
+        }
+
+// Map y from [1.2, 0.98] to [0, 1080] (inverted input range)
+int mapY(double y) {
+    return (int)((y - 1.2) / (0.98 - 1.2) * 1080.0);
+}
+
 void cursorTranslationService() {
     // Get current timestamp for message
     struct timespec now;
@@ -75,29 +84,37 @@ void cursorTranslationService() {
         std::cout << "Received eyeball data: " << received_str << std::endl;
 
         // Optionally parse it
-        int x, y, r;
-        sscanf(received_str.c_str(), "Eyeball:%d,%d,%d", &x, &y, &r);
-        std::cout << "Parsed: x=" << x << ", y=" << y << ", r=" << r << std::endl;
+        double x, y;
+        sscanf(received_str.c_str(), "%lf %lf", &x, &y);
+            struct input_event ev;
+        memset(&ev, 0, sizeof(ev));
+        gettimeofday(&ev.time, nullptr);
+        
+        x = mapX(x);
+        y = mapY(y);
+        
+        ev.type = EV_ABS;
+        ev.code = ABS_X;
+        ev.value = x;
+        write(fd, &ev, sizeof(ev));
+        
+        ev.code = ABS_Y;
+        ev.value = y;
+        write(fd, &ev, sizeof(ev));
+        
+        // Synchronize
+        ev.type = EV_SYN;
+        ev.code = SYN_REPORT;
+        ev.value = 0;
+        write(fd, &ev, sizeof(ev));
+        
+        std::cout << std::fixed << std::setprecision(2);
+        std::cout << "Parsed: x=" << x << ", y=" << y << std::endl;
     }
     
-    struct input_event ev;
-    memset(&ev, 0, sizeof(ev));
-    gettimeofday(&ev.time, nullptr);
     
-    ev.type = EV_ABS;
-    ev.code = ABS_X;
-    ev.value = DISPLAY_X - 20;
-    write(fd, &ev, sizeof(ev));
     
-    ev.code = ABS_Y;
-    ev.value = DISPLAY_Y - 20;
-    write(fd, &ev, sizeof(ev));
-    
-    // Synchronize
-    ev.type = EV_SYN;
-    ev.code = SYN_REPORT;
-    ev.value = 0;
-    write(fd, &ev, sizeof(ev));
+
 
     // Send message via ZeroMQ
     std::string msg_str = message.str();
