@@ -6,6 +6,8 @@
 #include <iostream>
 #include <linux/uinput.h>
 #include <X11/Xlib.h>
+#include <vector>
+#include <opencv2/core.hpp>
 #include "MessageQueue.hpp"
 
 static int message_counter = 0;
@@ -14,10 +16,11 @@ static int fd = 0;
 #define DISPLAY_Y 1080
 #define CAMERA_X 640 // Camera width
 #define CAMERA_Y 480 // Camera height
-#define FACE_X_MIN 200 // Estimated min x-coordinate of face center (60 deg left)
-#define FACE_X_MAX 440 // Estimated max x-coordinate of face center (60 deg right)
-#define FACE_Y_MIN 120 // Estimated min y-coordinate of face center
-#define FACE_Y_MAX 360 // Estimated max y-coordinate of face center
+#define FACE_X_MIN 120 // Min x-coordinate for 60 deg left (after inversion)
+#define FACE_X_MAX 520 // Max x-coordinate for 60 deg right (after inversion)
+#define FACE_Y_MIN 80  // Min y-coordinate for 60 deg up
+#define FACE_Y_MAX 400 // Max y-coordinate for 60 deg down
+#define SMOOTHING_WINDOW 5 // Number of frames for moving average
 
 uint8_t cursorInit() {
     fd = open("/dev/uinput", O_WRONLY | O_NONBLOCK);
@@ -72,6 +75,9 @@ void cursorTranslationService() {
     std::stringstream message;
     message << "ProducerMsg_" << message_counter++ << "_" << now.tv_sec << "." << std::setw(9) << std::setfill('0') << now.tv_nsec;
 
+    // Smoothing buffer
+    static std::vector<cv::Point> recent_centers;
+
     // Receive face center coordinates
     zmq::message_t face_msg;
     if (zmq_pull_face_socket.recv(face_msg, zmq::recv_flags::dontwait)) {
@@ -86,9 +92,30 @@ void cursorTranslationService() {
             // Invert x-coordinate to correct for mirrored camera image
             x = CAMERA_X - x;
 
+            // Smooth coordinates using moving average
+            recent_centers.push_back(cv::Point(x, y));
+            if (recent_centers.size() > SMOOTHING_WINDOW) {
+                recent_centers.erase(recent_centers.begin());
+            }
+            float avg_x = 0, avg_y = 0;
+            for (const auto& p : recent_centers) {
+                avg_x += p.x;
+                avg_y += p.y;
+            }
+            avg_x /= recent_centers.size();
+            avg_y /= recent_centers.size();
+            x = static_cast<int>(avg_x);
+            y = static_cast<int>(avg_y);
+
+            // Log smoothed coordinates
+            std::cout << "Smoothed: x=" << x << ", y=" << y << std::endl;
+
             // Normalize coordinates to [0, 1] based on face movement range
             float norm_x = static_cast<float>(x - FACE_X_MIN) / (FACE_X_MAX - FACE_X_MIN);
             float norm_y = static_cast<float>(y - FACE_Y_MIN) / (FACE_Y_MAX - FACE_Y_MIN);
+
+            // Log normalized coordinates
+            std::cout << "Normalized: norm_x=" << norm_x << ", norm_y=" << norm_y << std::endl;
 
             // Map normalized coordinates to display coordinates
             int display_x = static_cast<int>(norm_x * DISPLAY_X);
@@ -97,6 +124,9 @@ void cursorTranslationService() {
             // Ensure coordinates are within display bounds
             display_x = std::max(0, std::min(display_x, DISPLAY_X));
             display_y = std::max(0, std::min(display_y, DISPLAY_Y));
+
+            // Log final display coordinates
+            std::cout << "Display: x=" << display_x << ", y=" << display_y << std::endl;
 
             // Move cursor using uinput
             struct input_event ev;

@@ -10,6 +10,7 @@
 #include <sched.h>
 #include <pthread.h>
 #include <cstdio>
+#include <string>
 
 #define INITIAL_CYCLE_STATS_IGNORE_COUNT (10) // Give time for execution to stabilze before tracking min and max values
 #define RELEASE_MARGIN_NS (50) // Service can release up to this many nanoseconds early
@@ -20,12 +21,14 @@
 static int _delta_t(struct timespec *stop, struct timespec *start, struct timespec *delta_t);
 class Service {
 public:
+    std::string service_name; // Added to store service name
     uint8_t service_affinity;
     uint8_t service_priority;
     uint32_t service_period;
 
     template<typename T>
-    Service(T&& doService, uint8_t affinity, uint8_t priority, uint32_t period) :
+    Service(std::string name, T&& doService, uint8_t affinity, uint8_t priority, uint32_t period) :
+        service_name(std::move(name)),
         service_affinity(affinity),
         service_priority(priority),
         service_period(period),
@@ -38,6 +41,7 @@ public:
 
     // Fixed move constructor
     Service(Service&& other) noexcept :
+        service_name(std::move(other.service_name)),
         service_affinity(other.service_affinity),
         service_priority(other.service_priority),
         service_period(other.service_period),
@@ -56,6 +60,7 @@ public:
         if (this != &other)
         {
             stop(); // Stop the current thread
+            service_name = std::move(other.service_name);
             service_affinity = other.service_affinity;
             service_priority = other.service_priority;
             service_period = other.service_period;
@@ -183,11 +188,13 @@ private:
         long jitter_ns = start_max_ns - start_min_ns;
         // Log calculated timing statistics
         std::printf(
-            "\nExecution Time (in milliseconds) Stats for thread %lu with period %u ms\n"
+            "\nStatistics for Service '%s' (Thread %lu, Period %u ms):\n"
+            "Execution Time (in milliseconds):\n"
             "Min: %.3f ms  \tMax: %.3f ms  \tAvg: %.3f ms\tJitter: %.3f ms\n"
             "Start Deviation (in milliseconds):\n"
             "Min: %.3f ms  \tMax: %.3f ms  \tAvg: %.3f ms\tJitter: %.3f ms\n"
             "Cycles Ran: %lu\n",
+            service_name.c_str(),
             (unsigned long)pthread_self(), 
             service_period, 
             exec_min_ns / 1000000.0, 
@@ -210,9 +217,9 @@ private:
 class Sequencer {
 public:
     template<typename... Args>
-    void addService(Args&&... args)
+    void addService(std::string name, Args&&... args)
     {
-        _services.emplace_back(std::forward<Args>(args)...);
+        _services.emplace_back(name, std::forward<Args>(args)...);
     }
 
     void startServices()
@@ -233,7 +240,6 @@ public:
             service.stop();
         }
     }
-
 private:
     std::vector<Service> _services;
     std::jthread _timer;
@@ -328,19 +334,19 @@ private:
 
 int _delta_t(struct timespec *stop, struct timespec *start, struct timespec *delta_t)
 { // Modified from provided Exercise 1 code
-	long dt_sec=stop->tv_sec - start->tv_sec;
-	long dt_nsec=stop->tv_nsec - start->tv_nsec;
+    long dt_sec=stop->tv_sec - start->tv_sec;
+    long dt_nsec=stop->tv_nsec - start->tv_nsec;
 
-	if(dt_nsec >= 0)
-	{
-	  delta_t->tv_sec=dt_sec;
-	  delta_t->tv_nsec=dt_nsec;
-	}
-	else
-	{
-	  delta_t->tv_sec=dt_sec-1;
-	  delta_t->tv_nsec=NS_PER_SEC+dt_nsec;
-	}
+    if(dt_nsec >= 0)
+    {
+      delta_t->tv_sec=dt_sec;
+      delta_t->tv_nsec=dt_nsec;
+    }
+    else
+    {
+      delta_t->tv_sec=dt_sec-1;
+      delta_t->tv_nsec=NS_PER_SEC+dt_nsec;
+    }
 
-	return(1);
+    return(1);
 }

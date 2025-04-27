@@ -9,19 +9,37 @@
 #include <cstring>
 #include <opencv2/opencv.hpp>
 #include <errno.h>
+#include <zmq.hpp>
 
 static constexpr uint8_t NUM_OF_MEM_BUFFERS = 4;
 
-extern zmq::socket_t zmq_pub_socket; // Changed to pub socket
+extern zmq::socket_t zmq_pub_socket; // PUB socket for ZeroMQ
+
+// Callback to free the buffer after ZMQ is done sending
+void free_buffer(void* data, void* hint) {
+    struct BufferContext {
+        int fd;
+        struct v4l2_buffer buf;
+    };
+    BufferContext* context = static_cast<BufferContext*>(hint);
+    
+    // Re-queue the buffer
+    if (ioctl(context->fd, VIDIOC_QBUF, &context->buf) == -1) {
+        std::fprintf(stderr, "Failed to re-queue buffer: %s\n", strerror(errno));
+    }
+    
+    delete context; // Clean up the context
+}
 
 void imageCaptureService() {
     static int fd = -1;
     static bool cap_initialized = false;
-    static struct v4l2_buffer buf;
-    static void* buffer_start = nullptr;
-    static unsigned int buffer_length = 0;
+    static struct v4l2_buffer buffers[NUM_OF_MEM_BUFFERS];
+    static void* buffer_starts[NUM_OF_MEM_BUFFERS] = {nullptr};
+    static unsigned int buffer_lengths[NUM_OF_MEM_BUFFERS] = {0};
     static int width = 0;
     static int height = 0;
+    static unsigned int next_overwrite_index = 0; // Tracks oldest buffer to overwrite
 
     // Initialize the camera device
     if (!cap_initialized) {
@@ -85,39 +103,57 @@ void imageCaptureService() {
             close(fd);
             return;
         }
-
-        // Map the buffer
-        memset(&buf, 0, sizeof(buf));
-        buf.type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
-        buf.memory = V4L2_MEMORY_MMAP;
-        buf.index = 0;
-        if (ioctl(fd, VIDIOC_QUERYBUF, &buf) == -1) {
-            std::fprintf(stderr, "Failed to query buffer: %s\n", strerror(errno));
+        if (req.count < NUM_OF_MEM_BUFFERS) {
+            std::fprintf(stderr, "Insufficient buffers allocated: %d\n", req.count);
             close(fd);
             return;
         }
 
-        buffer_length = buf.length;
-        buffer_start = mmap(NULL, buf.length, PROT_READ | PROT_WRITE, MAP_SHARED, fd, buf.m.offset);
-        if (buffer_start == MAP_FAILED) {
-            std::fprintf(stderr, "Failed to map buffer: %s\n", strerror(errno));
-            close(fd);
-            return;
-        }
+        // Map and queue all buffers
+        for (unsigned int i = 0; i < NUM_OF_MEM_BUFFERS; ++i) {
+            memset(&buffers[i], 0, sizeof(buffers[i]));
+            buffers[i].type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
+            buffers[i].memory = V4L2_MEMORY_MMAP;
+            buffers[i].index = i;
 
-        // Queue the buffer
-        if (ioctl(fd, VIDIOC_QBUF, &buf) == -1) {
-            std::fprintf(stderr, "Failed to queue buffer: %s\n", strerror(errno));
-            munmap(buffer_start, buffer_length);
-            close(fd);
-            return;
+            if (ioctl(fd, VIDIOC_QUERYBUF, &buffers[i]) == -1) {
+                std::fprintf(stderr, "Failed to query buffer %u: %s\n", i, strerror(errno));
+                for (unsigned int j = 0; j < i; ++j) {
+                    munmap(buffer_starts[j], buffer_lengths[j]);
+                }
+                close(fd);
+                return;
+            }
+
+            buffer_lengths[i] = buffers[i].length;
+            buffer_starts[i] = mmap(NULL, buffers[i].length, PROT_READ | PROT_WRITE, MAP_SHARED, fd, buffers[i].m.offset);
+            if (buffer_starts[i] == MAP_FAILED) {
+                std::fprintf(stderr, "Failed to map buffer %u: %s\n", i, strerror(errno));
+                for (unsigned int j = 0; j < i; ++j) {
+                    munmap(buffer_starts[j], buffer_lengths[j]);
+                }
+                close(fd);
+                return;
+            }
+
+            // Queue the buffer
+            if (ioctl(fd, VIDIOC_QBUF, &buffers[i]) == -1) {
+                std::fprintf(stderr, "Failed to queue buffer %u: %s\n", i, strerror(errno));
+                for (unsigned int j = 0; j <= i; ++j) {
+                    munmap(buffer_starts[j], buffer_lengths[j]);
+                }
+                close(fd);
+                return;
+            }
         }
 
         // Start streaming
         enum v4l2_buf_type type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
         if (ioctl(fd, VIDIOC_STREAMON, &type) == -1) {
             std::fprintf(stderr, "Failed to start streaming: %s\n", strerror(errno));
-            munmap(buffer_start, buffer_length);
+            for (unsigned int i = 0; i < NUM_OF_MEM_BUFFERS; ++i) {
+                munmap(buffer_starts[i], buffer_lengths[i]);
+            }
             close(fd);
             return;
         }
@@ -126,12 +162,12 @@ void imageCaptureService() {
     }
 
     // Non-blocking frame capture
+    struct v4l2_buffer buf;
     memset(&buf, 0, sizeof(buf));
     buf.type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
     buf.memory = V4L2_MEMORY_MMAP;
-    buf.index = 0;
 
-    // Check if a frame is ready (non-blocking)
+    // Try to dequeue a buffer
     if (ioctl(fd, VIDIOC_DQBUF, &buf) == -1) {
         if (errno == EAGAIN) {
             // No frame available yet, return without blocking
@@ -141,8 +177,14 @@ void imageCaptureService() {
         return;
     }
 
+    unsigned int buf_index = buf.index;
+    if (buf_index >= NUM_OF_MEM_BUFFERS) {
+        std::fprintf(stderr, "Invalid buffer index: %u\n", buf_index);
+        ioctl(fd, VIDIOC_QBUF, &buf); // Re-queue to avoid hanging
+        return;
+    }
+
     // Send the raw frame data via ZMQ (non-blocking)
-    // First, send metadata (width, height, format) as a header
     struct FrameMetadata {
         int width;
         int height;
@@ -156,22 +198,66 @@ void imageCaptureService() {
     memcpy(metadata_msg.data(), &metadata, sizeof(FrameMetadata));
     if (!zmq_pub_socket.send(metadata_msg, zmq::send_flags::sndmore | zmq::send_flags::dontwait)) {
         std::fputs("Failed to send metadata via ZMQ\n", stderr);
+        // Re-queue the buffer
         ioctl(fd, VIDIOC_QBUF, &buf);
         return;
     }
 
-    // Send the raw frame data as the second part
-    zmq::message_t frame_msg(buf.bytesused);
-    memcpy(frame_msg.data(), buffer_start, buf.bytesused);
+    // Create a context to pass to the free callback
+    struct BufferContext {
+        int fd;
+        struct v4l2_buffer buf;
+    };
+    BufferContext* context = new BufferContext{fd, buf};
+
+    // Send the raw frame data as a pointer using zmq::message_t constructor
+    zmq::message_t frame_msg(buffer_starts[buf_index], buf.bytesused, free_buffer, context);
     if (!zmq_pub_socket.send(frame_msg, zmq::send_flags::dontwait)) {
         std::fputs("Failed to send raw frame data via ZMQ\n", stderr);
+        // Clean up context since free_buffer won't be called
+        delete context;
+        // Re-queue the buffer
         ioctl(fd, VIDIOC_QBUF, &buf);
         return;
     }
 
-    // Re-queue the buffer for the next capture
-    if (ioctl(fd, VIDIOC_QBUF, &buf) == -1) {
-        std::fprintf(stderr, "Failed to re-queue buffer: %s\n", strerror(errno));
-        return;
+    // Try to queue a new buffer
+    bool queued = false;
+    for (unsigned int i = 0; i < NUM_OF_MEM_BUFFERS; ++i) {
+        unsigned int try_index = (next_overwrite_index + i) % NUM_OF_MEM_BUFFERS;
+        struct v4l2_buffer& try_buf = buffers[try_index];
+        
+        // Check if the buffer is available (not dequeued or in use)
+        try_buf.type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
+        try_buf.memory = V4L2_MEMORY_MMAP;
+        try_buf.index = try_index;
+
+        if (ioctl(fd, VIDIOC_QUERYBUF, &try_buf) == -1) {
+            continue; // Buffer might be in use, try next
+        }
+
+        if (ioctl(fd, VIDIOC_QBUF, &try_buf) == -1) {
+            continue; // Failed to queue, try next
+        }
+
+        next_overwrite_index = (try_index + 1) % NUM_OF_MEM_BUFFERS;
+        queued = true;
+        break;
+    }
+
+    if (!queued) {
+        // All buffers are in use; overwrite the oldest dequeued buffer
+        unsigned int overwrite_index = next_overwrite_index;
+        struct v4l2_buffer& overwrite_buf = buffers[overwrite_index];
+
+        overwrite_buf.type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
+        overwrite_buf.memory = V4L2_MEMORY_MMAP;
+        overwrite_buf.index = overwrite_index;
+
+        if (ioctl(fd, VIDIOC_QBUF, &overwrite_buf) == -1) {
+            std::fprintf(stderr, "Failed to overwrite buffer %u: %s\n", overwrite_index, strerror(errno));
+        } else {
+            next_overwrite_index = (overwrite_index + 1) % NUM_OF_MEM_BUFFERS;
+        }
     }
 }

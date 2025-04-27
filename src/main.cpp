@@ -11,6 +11,8 @@
 #include <iostream>
 #include <unistd.h>
 #include <linux/gpio.h>
+#include <chrono>
+#include <thread>
 
 #include <fstream>
 #include "Sequencer.hpp"
@@ -25,42 +27,61 @@ std::atomic<bool> _runningstate{true};
 
 void signalHandler(int signum)
 {
-    std::puts("\nReceived Ctrl+C, stopping services ");
+    // Only set the flag to ensure async-signal-safety
     _runningstate.store(false, std::memory_order_relaxed);
-    flushCsvFile();
-    cursorDeinit();
-
-    //cleanup_zmq();
-  
 }
-
 
 int main(int argc, char* argv[])
 {
-    std::signal(SIGINT, signalHandler);
-
-
-    
-    cursorInit();    
-
-
-
-    initialize_zmq();
-    Sequencer sequencer{};
-  
-
-    // Add the producer service (runs every 250ms)
-    sequencer.addService(cursorTranslationService, 1, 99, 50);
-    sequencer.addService(imageCaptureService, 1, 98, 100);   
-    sequencer.addService(faceCenterDetectionService, 2, 97, 100); 
-    sequencer.addService(imageCompressionService, 2, 96, 100);  
-    sequencer.addService(messageQueueToCsvService, 2, 95, 250);
-
-    sequencer.startServices();
-    while (_runningstate.load(std::memory_order_relaxed))
-    {
-        std::this_thread::sleep_for(std::chrono::milliseconds(100));
+    // Install signal handler for SIGINT
+    if (std::signal(SIGINT, signalHandler) == SIG_ERR) {
+        std::cerr << "Error: Failed to install SIGINT handler\n";
+        return 1;
     }
-    sequencer.stopServices();
+
+    // Declare sequencer outside try block to ensure scope in catch
+    Sequencer sequencer;
+
+    // Initialize resources
+    try {
+        cursorInit();
+        initialize_zmq();
+
+        // Add services
+        sequencer.addService("cursorTranslationService", cursorTranslationService, 1, 99, 50);
+        sequencer.addService("imageCaptureService", imageCaptureService, 1, 98, 100);
+        sequencer.addService("faceCenterDetectionService", faceCenterDetectionService, 2, 97, 100);
+        sequencer.addService("imageCompressionService", imageCompressionService, 2, 96, 100);
+        sequencer.addService("messageQueueToCsvService", messageQueueToCsvService, 2, 95, 250);
+
+        // Start services
+        sequencer.startServices();
+
+        // Main loop: Wait until SIGINT or error
+        while (_runningstate.load(std::memory_order_relaxed)) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(100));
+        }
+
+        // Shutdown: Stop services and clean up
+        std::puts("Stopping services...");
+        sequencer.stopServices(); // Stop services in main thread
+
+        // Clean up resources
+        std::puts("Cleaning up resources...");
+        flushCsvFile();
+        cursorDeinit();
+        cleanup_zmq();
+    }
+    catch (const std::exception& e) {
+        std::cerr << "Error: " << e.what() << std::endl;
+        _runningstate.store(false, std::memory_order_relaxed);
+        sequencer.stopServices(); // Now in scope
+        flushCsvFile();
+        cursorDeinit();
+        cleanup_zmq();
+        return 1;
+    }
+
+    std::puts("Shutdown complete.");
     return 0;
 }

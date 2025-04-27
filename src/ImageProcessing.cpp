@@ -67,7 +67,7 @@ void faceCenterDetection(Mat& frame, CascadeClassifier& faceCascade, Point& face
     int radius = faceRect.width / 8;
     circle(frame, faceCenter, radius, Scalar(0, 0, 255), 2);
 
-    cout << "Face center location: " << faceCenter << endl;
+    cout << "Raw face center: x=" << faceCenter.x << ", y=" << faceCenter.y << endl;
 }
 
 void faceCenterDetectionService() {
@@ -116,6 +116,9 @@ void faceCenterDetectionService() {
             cerr << "Unsupported frame format: " << metadata.format << endl;
             continue;
         }
+
+        // Log camera resolution
+        cout << "Camera resolution: width=" << metadata.width << ", height=" << metadata.height << endl;
 
         // Receive the raw frame data (second part)
         zmq::message_t frame_msg;
@@ -167,7 +170,7 @@ void faceCenterDetectionService() {
         sprintf(buffer, "Timing for face center detection: %ld sec, %ld msec, %ld usec\n",
                 thread_dt.tv_sec, (thread_dt.tv_nsec / NSEC_PER_MSEC), (thread_dt.tv_nsec / NSEC_PER_MICROSEC));
         puts(buffer);
-        imshow("Webcam", frame);
-        if (waitKey(30) >= 0) break;
+        // imshow("Webcam", frame);
+        // if (waitKey(30) >= 0) break;
     }
 }
