@@ -1,4 +1,3 @@
-#include "CursorTranslation.hpp"
 #include "Logging.hpp"
 #include <sstream>
 #include <iomanip>
@@ -9,6 +8,9 @@
 #include <vector>
 #include <opencv2/core.hpp>
 #include "MessageQueue.hpp"
+#include <fstream>
+#include <string>
+#include <fcntl.h>
 
 static int message_counter = 0;
 static int fd = 0;
@@ -22,7 +24,60 @@ static int fd = 0;
 #define FACE_Y_MAX 400 // Max y-coordinate for 60 deg down
 #define SMOOTHING_WINDOW 5 // Number of frames for moving average
 
+// Structure to hold calibration data
+struct CalibrationData {
+    int left_x;   // Max left turn (replaces FACE_X_MIN)
+    int right_x;  // Max right turn (replaces FACE_X_MAX)
+    int top_y;    // Max up (replaces FACE_Y_MIN)
+    int bottom_y; // Max down (replaces FACE_Y_MAX)
+};
+
+// Structure to hold face and cursor coordinates for message queue
+struct FaceAndCursorCoords {
+    int face_x;
+    int face_y;
+    int cursor_x;
+    int cursor_y;
+};
+
+// Global calibration data (defaults match original constants)
+static CalibrationData calib_data = {120, 520, 80, 400};
+
+// Callback to free the FaceAndCursorCoords memory
+void free_coords(void* data, void* hint) {
+    delete static_cast<FaceAndCursorCoords*>(hint);
+}
+
+// Load calibration data from file
+void loadCalibrationData(const std::string& filename) {
+    std::ifstream file(filename);
+    if (!file.is_open()) {
+        std::cerr << "Failed to open calibration file: " << filename << ". Using default values.\n";
+        return;
+    }
+
+    std::string line;
+    // Read header
+    std::getline(file, line);
+    // Read data
+    if (std::getline(file, line)) {
+        int straight_x, straight_y;
+        if (sscanf(line.c_str(), "%d,%d,%d,%d,%d,%d",
+                   &straight_x, &straight_y,
+                   &calib_data.left_x, &calib_data.right_x,
+                   &calib_data.top_y, &calib_data.bottom_y) == 6) {
+        } else {
+            std::cerr << "Invalid calibration data format in " << filename << ". Using default values.\n";
+        }
+    } else {
+        std::cerr << "Empty calibration file: " << filename << ". Using default values.\n";
+    }
+}
+
 uint8_t cursorInit() {
+    // Load calibration data
+    loadCalibrationData("calibration.csv");
+
     fd = open("/dev/uinput", O_WRONLY | O_NONBLOCK);
     if (fd < 0) {
         std::cerr << "Failed to open /dev/uinput\n";
@@ -69,12 +124,6 @@ void cursorDeinit() {
 }
 
 void cursorTranslationService() {
-    // Get current timestamp for message
-    struct timespec now;
-    clock_gettime(CLOCK_MONOTONIC, &now);
-    std::stringstream message;
-    message << "ProducerMsg_" << message_counter++ << "_" << now.tv_sec << "." << std::setw(9) << std::setfill('0') << now.tv_nsec;
-
     // Smoothing buffer
     static std::vector<cv::Point> recent_centers;
 
@@ -82,13 +131,10 @@ void cursorTranslationService() {
     zmq::message_t face_msg;
     if (zmq_pull_face_socket.recv(face_msg, zmq::recv_flags::dontwait)) {
         std::string received_str(static_cast<char*>(face_msg.data()), face_msg.size());
-        std::cout << "Received face center data: " << received_str << std::endl;
 
         // Parse the face center coordinates
         int x, y;
         if (sscanf(received_str.c_str(), "FaceCenter:%d,%d", &x, &y) == 2) {
-            std::cout << "Parsed: x=" << x << ", y=" << y << std::endl;
-
             // Invert x-coordinate to correct for mirrored camera image
             x = CAMERA_X - x;
 
@@ -107,15 +153,9 @@ void cursorTranslationService() {
             x = static_cast<int>(avg_x);
             y = static_cast<int>(avg_y);
 
-            // Log smoothed coordinates
-            std::cout << "Smoothed: x=" << x << ", y=" << y << std::endl;
-
-            // Normalize coordinates to [0, 1] based on face movement range
-            float norm_x = static_cast<float>(x - FACE_X_MIN) / (FACE_X_MAX - FACE_X_MIN);
-            float norm_y = static_cast<float>(y - FACE_Y_MIN) / (FACE_Y_MAX - FACE_Y_MIN);
-
-            // Log normalized coordinates
-            std::cout << "Normalized: norm_x=" << norm_x << ", norm_y=" << norm_y << std::endl;
+            // Normalize coordinates to [0, 1] based on calibration data
+            float norm_x = static_cast<float>(x - calib_data.right_x) / (calib_data.left_x - calib_data.right_x);
+            float norm_y = static_cast<float>(y - calib_data.top_y) / (calib_data.bottom_y - calib_data.top_y);
 
             // Map normalized coordinates to display coordinates
             int display_x = static_cast<int>(norm_x * DISPLAY_X);
@@ -124,9 +164,6 @@ void cursorTranslationService() {
             // Ensure coordinates are within display bounds
             display_x = std::max(0, std::min(display_x, DISPLAY_X));
             display_y = std::max(0, std::min(display_y, DISPLAY_Y));
-
-            // Log final display coordinates
-            std::cout << "Display: x=" << display_x << ", y=" << display_y << std::endl;
 
             // Move cursor using uinput
             struct input_event ev;
@@ -147,14 +184,13 @@ void cursorTranslationService() {
             ev.code = SYN_REPORT;
             ev.value = 0;
             write(fd, &ev, sizeof(ev));
+
+            // Send face and cursor coordinates to message queue
+            FaceAndCursorCoords* coords = new FaceAndCursorCoords{x, y, display_x, display_y};
+            zmq::message_t msg(coords, sizeof(FaceAndCursorCoords), free_coords, coords);
+            zmq_push_control_socket.send(msg, zmq::send_flags::dontwait);
         } else {
             std::cerr << "Failed to parse face center data: " << received_str << std::endl;
         }
     }
-
-    // Send message via ZeroMQ (unchanged)
-    std::string msg_str = message.str();
-    zmq::message_t msg(msg_str.size());
-    memcpy(msg.data(), msg_str.data(), msg_str.size());
-    zmq_push_control_socket.send(msg, zmq::send_flags::dontwait);  
 }

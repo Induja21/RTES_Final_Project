@@ -66,8 +66,6 @@ void faceCenterDetection(Mat& frame, CascadeClassifier& faceCascade, Point& face
     // Draw a circle at the center of the face
     int radius = faceRect.width / 8;
     circle(frame, faceCenter, radius, Scalar(0, 0, 255), 2);
-
-    cout << "Raw face center: x=" << faceCenter.x << ", y=" << faceCenter.y << endl;
 }
 
 void faceCenterDetectionService() {
@@ -117,9 +115,6 @@ void faceCenterDetectionService() {
             continue;
         }
 
-        // Log camera resolution
-        cout << "Camera resolution: width=" << metadata.width << ", height=" << metadata.height << endl;
-
         // Receive the raw frame data (second part)
         zmq::message_t frame_msg;
         if (!zmq_sub_socket_face.recv(frame_msg, zmq::recv_flags::dontwait)) {
@@ -166,10 +161,6 @@ void faceCenterDetectionService() {
             zmq_push_face_socket.send(msg, zmq::send_flags::dontwait);
         }
 
-        char buffer[100];
-        sprintf(buffer, "Timing for face center detection: %ld sec, %ld msec, %ld usec\n",
-                thread_dt.tv_sec, (thread_dt.tv_nsec / NSEC_PER_MSEC), (thread_dt.tv_nsec / NSEC_PER_MICROSEC));
-        puts(buffer);
         // imshow("Webcam", frame);
         // if (waitKey(30) >= 0) break;
     }

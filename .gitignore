@@ -3,6 +3,6 @@ images/
 
 # Ignore .o files
 *.o
-
+faceDetection
 # Ignore .csv files
 *.csv
