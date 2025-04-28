@@ -3,6 +3,7 @@ images/
 
 # Ignore .o files
 *.o
+calibration
 faceDetection
 # Ignore .csv files
 *.csv
