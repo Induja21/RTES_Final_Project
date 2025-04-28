@@ -63,12 +63,12 @@ void cursorDeinit()
 }
 
 int mapX(double x) {
-            return (int)((x - 1.2) / (0.8 - 1.2) * 1920.0);
+            return (int)((x - 1.2) / (0.88 - 1.2) * 1920.0);
         }
 
 // Map y from [1.2, 0.98] to [0, 1080] (inverted input range)
 int mapY(double y) {
-    return (int)((y - 1.2) / (0.98 - 1.2) * 1080.0);
+    return (int)((y - 0.85) / (1.2-0.85) * 1080.0);
 }
 
 void cursorTranslationService() {
