@@ -246,8 +246,8 @@ void eyeDetection(Mat& frame, CascadeClassifier& faceCascade, CascadeClassifier&
     int minimum_Distance = eye.cols / 8;
     int threshold = 250;
     int minimum_Area = 15;
-    int minimum_Radius = eye.rows / 8;
-    int maximum_Radius = eye.rows / 3;
+    int minimum_Radius = eye.rows / 6;
+    int maximum_Radius = eye.rows / 4;
     HoughCircles(eye, circles, HOUGH_GRADIENT, detect_Pixel, minimum_Distance, threshold, minimum_Area, minimum_Radius, maximum_Radius);
 
     if (circles.size()>0) {
