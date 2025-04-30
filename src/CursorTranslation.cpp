@@ -1,6 +1,7 @@
 #include "CursorTranslation.hpp"
 #include "Logging.hpp"
-
+#include <vector>
+#include <algorithm>
 #include <sstream>
 #include <iomanip>
 #include <ctime>
@@ -11,9 +12,14 @@
 // Static counter for unique message IDs
 static int message_counter = 0;
 static int fd = 0;
-#define DISPLAY_X 1920
-#define DISPLAY_Y 1080
-
+const int SMOOTHING_WINDOW = 5;
+const int DISPLAY_X = 1920;
+const int DISPLAY_Y = 1080;
+const float GAZE_LR_MIN = 45;  // Right
+const float GAZE_LR_MAX = 30;  // Left
+const float GAZE_UD_MIN = 20;  // Up
+const float GAZE_UD_MAX = 35;  // Down
+std::vector<float> recent_gaze_lr, recent_gaze_ud;
 uint8_t cursorInit()
 {
     fd = open("/dev/uinput", O_WRONLY | O_NONBLOCK);
@@ -84,22 +90,48 @@ void cursorTranslationService() {
         std::cout << "Received eyeball data: " << received_str << std::endl;
 
         // Optionally parse it
-        double x, y;
-        sscanf(received_str.c_str(), "%lf %lf", &x, &y);
+        double gaze_left_right, gaze_up_down;
+        sscanf(received_str.c_str(), "%lf %lf", &gaze_left_right, &gaze_up_down);
             struct input_event ev;
         memset(&ev, 0, sizeof(ev));
         gettimeofday(&ev.time, nullptr);
         
-        x = mapX(x);
-        y = mapY(y);
+        // Smooth gaze ratios
+        recent_gaze_lr.push_back(gaze_left_right);
+        recent_gaze_ud.push_back(gaze_up_down);
+        if (recent_gaze_lr.size() > SMOOTHING_WINDOW) {
+            recent_gaze_lr.erase(recent_gaze_lr.begin());
+            recent_gaze_ud.erase(recent_gaze_ud.begin());
+        }
+        float avg_lr = 0, avg_ud = 0;
+        for (size_t i = 0; i < recent_gaze_lr.size(); ++i) {
+            avg_lr += recent_gaze_lr[i];
+            avg_ud += recent_gaze_ud[i];
+        }
+        avg_lr /= recent_gaze_lr.size();
+        avg_ud /= recent_gaze_ud.size();
+
+        // Map gaze ratios to normalized coordinates [0, 1]
+        float norm_x = (avg_lr - GAZE_LR_MIN) / (GAZE_LR_MAX - GAZE_LR_MIN); // 1.2->0 (right), 1.5->1 (left)
+        float norm_y = (avg_ud - GAZE_UD_MIN) / (GAZE_UD_MAX - GAZE_UD_MIN); // 0.9->0 (up), 1.2->1 (down)
+
+        // Map normalized coordinates to display coordinates
+        int display_x = static_cast<int>(norm_x * DISPLAY_X); // 0 to 1920
+        int display_y = static_cast<int>(norm_y * DISPLAY_Y); // 0 to 1080
+
+        // Clamp coordinates to display bounds
+        display_x = std::max(0, std::min(display_x, DISPLAY_X));
+        display_y = std::max(0, std::min(display_y, DISPLAY_Y));
+            
+
         
         ev.type = EV_ABS;
         ev.code = ABS_X;
-        ev.value = x;
+        ev.value = display_x;
         write(fd, &ev, sizeof(ev));
         
         ev.code = ABS_Y;
-        ev.value = y;
+        ev.value = display_y;
         write(fd, &ev, sizeof(ev));
         
         // Synchronize
@@ -109,7 +141,7 @@ void cursorTranslationService() {
         write(fd, &ev, sizeof(ev));
         
         std::cout << std::fixed << std::setprecision(2);
-        std::cout << "Parsed: x=" << x << ", y=" << y << std::endl;
+        std::cout << "Parsed: x=" << display_x << ", y=" << display_y << std::endl;
     }
     
     

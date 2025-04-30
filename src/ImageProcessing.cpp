@@ -122,7 +122,7 @@ void eyeDetection(Mat& frame, CascadeClassifier& faceCascade, CascadeClassifier&
         rectangle(frame, storedFaces[0].tl() + eye.tl(), storedFaces[0].tl() + eye.br(), Scalar(0, 255, 0), 2);
     }
 
-    // Detect left eye and eyeball
+    /*// Detect left eye and eyeball
     Rect eyeRect = detectLeftEye(eyes);
     // Calculate the middle third rectangle
     int thirdheight = eyeRect.height/ 3;
@@ -217,7 +217,7 @@ void eyeDetection(Mat& frame, CascadeClassifier& faceCascade, CascadeClassifier&
     else
       gazeRatioGaussian = static_cast<double>(leftWhiteGaussian) / rightWhiteGaussian; // Ratio of sclera in left vs right
 
-    string gazeDirection;
+    /*string gazeDirection;
     if (gazeRatioGaussian > 1.15)
       gazeDirection = "Looking Left";
     else if (gazeRatioGaussian < 0.85)
@@ -234,8 +234,12 @@ void eyeDetection(Mat& frame, CascadeClassifier& faceCascade, CascadeClassifier&
     else
       gazeUpDn = "Looking Center";
 
-    cout << "Gaze: " << gazeUpDn << " (" << gazeRatioUpDownGaussian << ")" << endl;
-
+    cout << "Gaze: " << gazeUpDn << " (" << gazeRatioUpDownGaussian << ")" << endl;*/
+    // Detect left eye and eyeball
+    Rect eyeRect = detectLeftEye(eyes);
+    Mat eye = face(eyeRect);
+    equalizeHist(eye, eye);
+    
     vector<Vec3f> circles;
     int method = 3;
     int detect_Pixel = 1;
@@ -261,7 +265,7 @@ void eyeDetection(Mat& frame, CascadeClassifier& faceCascade, CascadeClassifier&
         // Map x from [0.8, 1.1] to [0, 1920]
         
         std::ostringstream oss;
-        oss << std::fixed << std::setprecision(2) << gazeRatioGaussian << " " << gazeRatioUpDownGaussian;
+        oss << std::fixed << std::setprecision(2) << track_Eyeball.x << " " << track_Eyeball.y;
 
 
         // Send it as a ZMQ message
