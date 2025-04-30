@@ -1,352 +1,258 @@
+/*
+ * This is a C++ version of the canonical pthread service example. It intends
+ * to abstract the service management functionality and sequencing for ease
+ * of use. Much of the code is left to be implemented by the student.
+ *
+ * Build with g++ --std=c++23 -Wall -Werror -pedantic
+ * Steve Rizor 3/16/2025
+ */
+
 #pragma once
 
 #include <cstdint>
+#include <iostream>
 #include <functional>
 #include <thread>
 #include <vector>
-#include <semaphore>
+#include <semaphore.h>
 #include <atomic>
-#include <chrono>
-#include <sched.h>
-#include <pthread.h>
-#include <cstdio>
-#include <string>
 
-#define INITIAL_CYCLE_STATS_IGNORE_COUNT (10) // Give time for execution to stabilze before tracking min and max values
-#define RELEASE_MARGIN_NS (50) // Service can release up to this many nanoseconds early
-#define MAX_SLEEP_MS (100L)
-#define MS_TO_NS   (1000000L)
-#define NS_PER_SEC (1000000000L)
 
-static int _delta_t(struct timespec *stop, struct timespec *start, struct timespec *delta_t);
-class Service {
+
+
+
+// The service class contains the service function and service parameters
+// (priority, affinity, etc). It spawns a thread to run the service, configures
+// the thread as required, and executes the service whenever it gets released.
+class Service
+{
 public:
+    uint32_t getPeriod() const { return _period; }
     std::string service_name; // Added to store service name
-    uint8_t service_affinity;
-    uint8_t service_priority;
-    uint32_t service_period;
 
     template<typename T>
     Service(std::string name, T&& doService, uint8_t affinity, uint8_t priority, uint32_t period) :
-        service_name(std::move(name)),
-        service_affinity(affinity),
-        service_priority(priority),
-        service_period(period),
-        _doService(std::forward<T>(doService)),
-        _running(true),
-        _sem(0)
+        _doService(doService)
     {
+        // store service configuration values
+        service_name = std::move(name),
+        _affinity = affinity;
+        _priority = priority;
+        _period = period;
+        _isRunning = true;
+        // initialize release semaphore
+        sem_init(&_releaseSem, 0, 0); 
+        // Start the service thread, which will begin running the given function immediately
         _service = std::jthread(&Service::_provideService, this);
     }
+ 
+    void stop(){
+        // change state to "not running" using an atomic variable
+        _isRunning = false;
+        sem_post(&_releaseSem);
+        _service.request_stop(); 
+        sem_destroy(&_releaseSem);
 
-    // Fixed move constructor
-    Service(Service&& other) noexcept :
-        service_name(std::move(other.service_name)),
-        service_affinity(other.service_affinity),
-        service_priority(other.service_priority),
-        service_period(other.service_period),
-        _doService(std::move(other._doService)),
-        _running(other._running.load(std::memory_order_relaxed)),
-        _sem(0)
-    {
-        other.stop(); // Stop the thread in the moved-from object
-        _service = std::jthread(&Service::_provideService, this); // Start a new thread
-        while (other._sem.try_acquire()) {} // Ensure semaphore is safe
+        // Log execution statistics
+        logStatistics();
+
+
+        // (heads up: what if the service is waiting on the semaphore when this happens?)
     }
-
-    // Fixed move assignment operator
-    Service& operator=(Service&& other) noexcept
-    {
-        if (this != &other)
+ 
+    void release(){
+        // release the service using the semaphore
+ 
+        if(sem_post(&_releaseSem)!=0)
         {
-            stop(); // Stop the current thread
-            service_name = std::move(other.service_name);
-            service_affinity = other.service_affinity;
-            service_priority = other.service_priority;
-            service_period = other.service_period;
-            _doService = std::move(other._doService);
-            _running.store(other._running.load(std::memory_order_relaxed), std::memory_order_relaxed);
-            _service = std::jthread(&Service::_provideService, this); // Start a new thread
-            other.stop(); // Stop the thread in the moved-from object
-        }
-        return *this;
-    }
-
-    Service(const Service&) = delete;
-    Service& operator=(const Service&) = delete;
-
-    void stop()
-    {
-        _running.store(false, std::memory_order_relaxed);
-        _sem.release(); // Unblock the semaphore
-        if (_service.joinable())
-        {
-            _service.join(); // Ensure the thread exits
+            printf("Error %d\n",_period);
         }
     }
-
-    void release()
-    {
-        _sem.release();
-    }
-    void calcNextRelease(struct timespec *current_time, struct timespec *new_release_time)
-    {
-        if (!current_time || !new_release_time)
-           return; // Null Pointer!
-           
-        // Calculate next expected release time
-       new_release_time->tv_nsec = current_time->tv_nsec + (service_period * MS_TO_NS);  // Convert from milliseconds to nanoseconds
-       new_release_time->tv_sec = current_time->tv_sec;
-       if (new_release_time->tv_nsec > NS_PER_SEC) // If the nanoseconds exceed 1 second
-       {
-           new_release_time->tv_sec  += 1;
-           new_release_time->tv_nsec -= NS_PER_SEC;
-       }
-    }
+ 
 private:
     std::function<void(void)> _doService;
     std::jthread _service;
-    std::atomic<bool> _running;
-    std::counting_semaphore<1> _sem;
+    sem_t _releaseSem;
+    std::atomic<bool> _isRunning; // Changed to std::atomic<bool>
+
+
+    uint8_t _affinity;
+    uint8_t _priority;
+    uint32_t _period;
+
+    // Timing statistics
+    std::chrono::high_resolution_clock::time_point _lastStartTime;
+    double _minExecTime = std::numeric_limits<double>::max();
+    double _maxExecTime = 0.0;
+    double _totalExecTime = 0.0;
+    int _executionCount = 0;
+
+    double _minStartJitter = std::numeric_limits<double>::max();
+    double _maxStartJitter = 0.0;
+
 
     void _initializeService()
     {
+        // set affinity, priority, sched policy
+        pthread_t thisThread = pthread_self();
+
         cpu_set_t cpuset;
         CPU_ZERO(&cpuset);
-        CPU_SET(service_affinity, &cpuset);
-        if (pthread_setaffinity_np(pthread_self(), sizeof(cpu_set_t), &cpuset) != 0)
-        {
-            std::puts("Failed to set thread affinity");
+        CPU_SET(_affinity, &cpuset);
+
+        if (pthread_setaffinity_np(thisThread, sizeof(cpu_set_t), &cpuset) != 0) {
+            perror("Failed to set CPU affinity");
+            return;
         }
-        struct sched_param param;
-        param.sched_priority = service_priority;
-        if (pthread_setschedparam(pthread_self(), SCHED_FIFO, &param) != 0)
-        {
-            std::puts("Failed to set thread priority");
+
+
+        sched_param sch_params;
+        sch_params.sched_priority = _priority;
+
+        if (pthread_setschedparam(thisThread, SCHED_FIFO, &sch_params) != 0) {
+            perror("Failed to set scheduling policy/priority");
+            return;
         }
+
+
+        return;
+        // (heads up: the thread is already running and we're in its context right now)
     }
 
     void _provideService()
     {
         _initializeService();
-        
-        // Timing Statistics Variables
-        struct timespec start_time, stop_time, next_start, start_jitter, exec_jitter;
-        unsigned long int exec_min_ns = NS_PER_SEC, exec_max_ns = 0, exec_time, iteration_count = 0;
-        double exec_avg_ns = 0.0, start_avg_ns = 0.0;
-        long int start_min_ns = 1000 * MS_TO_NS, start_max_ns = -1000 * MS_TO_NS, start_dev;
-        
-        clock_gettime(CLOCK_MONOTONIC, &next_start);
-    
-        // Call _doService() on releases (sem acquire) while the atomic running variable is true
-        // Loop until service is stopped
-        while (_running.load(std::memory_order_relaxed)) 
-        {
-            // Wait until the semaphore is released
-            _sem.acquire();
-    
-            // If still running, execute the service function (for faster shutdown)
-            if (_running.load(std::memory_order_relaxed)) 
-            {
-                // Get start timestamp
-                clock_gettime(CLOCK_MONOTONIC, &start_time);
-                
-                _doService(); // Execute the service function
-                
-                // Get end timestamp
-                clock_gettime(CLOCK_MONOTONIC, &stop_time);
-                
-                // Calculate updated timing statistics: execution time jitter (min/max/avg) & start time jitter (min/max/avg ??)
-                // Calculate start and execution time
-                iteration_count++;
-                _delta_t(&start_time, &next_start, &start_jitter);
-                start_dev = start_jitter.tv_nsec + (NS_PER_SEC * start_jitter.tv_sec);
-                _delta_t(&stop_time, &start_time, &exec_jitter);
-                exec_time = exec_jitter.tv_nsec + (NS_PER_SEC * exec_jitter.tv_sec);
-                
-                // Update statistics
-                if(iteration_count > INITIAL_CYCLE_STATS_IGNORE_COUNT)
+        // todo: call _doService() on releases (sem acquire) while the atomic running variable is true
+        while (_isRunning) {
+            sem_wait(&_releaseSem);
+
+            
+
+            if (_isRunning) {
+
+                auto start = std::chrono::high_resolution_clock::now();
+
+                // Calculate start time jitter
+                if (_executionCount > 0)
                 {
-                    if(exec_min_ns > exec_time)
-                        exec_min_ns = exec_time;
-                    if(exec_max_ns < exec_time)
-                        exec_max_ns = exec_time;
-                    
-                    if(start_min_ns > start_dev)
-                        start_min_ns = start_dev;
-                    if(start_max_ns < start_dev)
-                        start_max_ns = start_dev;
+                    double actualInterval = std::chrono::duration<double, std::milli>(start - _lastStartTime).count();
+                    double expectedInterval = _period;
+                    double jitter = std::abs(actualInterval - expectedInterval);
+    
+                    _minStartJitter = std::min(_minStartJitter, jitter);
+                    _maxStartJitter = std::max(_maxStartJitter, jitter);
                 }
-                exec_avg_ns = (exec_avg_ns * (iteration_count - 1.0) / (double)iteration_count) + (exec_time / (double)iteration_count);
-                start_avg_ns = (start_avg_ns * (iteration_count - 1.0) / (double)iteration_count) + (start_dev / (double)iteration_count);
-                
-                
-                // Calculate next expected release time
-                calcNextRelease(&start_time, &next_start);
+    
+                _lastStartTime = start;
+
+                _doService();
+
+                auto end = std::chrono::high_resolution_clock::now();
+                double execTime = std::chrono::duration<double, std::milli>(end - start).count();
+    
+                _minExecTime = std::min(_minExecTime, execTime);
+                _maxExecTime = std::max(_maxExecTime, execTime);
+                _totalExecTime += execTime;
+                _executionCount++;
             }
         }
-        long jitter_ns = start_max_ns - start_min_ns;
-        // Log calculated timing statistics
-        std::printf(
-            "\nStatistics for Service '%s' (Thread %lu, Period %u ms):\n"
-            "Execution Time (in milliseconds):\n"
-            "Min: %.3f ms  \tMax: %.3f ms  \tAvg: %.3f ms\tJitter: %.3f ms\n"
-            "Start Deviation (in milliseconds):\n"
-            "Min: %.3f ms  \tMax: %.3f ms  \tAvg: %.3f ms\tJitter: %.3f ms\n"
-            "Cycles Ran: %lu\n",
-            service_name.c_str(),
-            (unsigned long)pthread_self(), 
-            service_period, 
-            exec_min_ns / 1000000.0, 
-            exec_max_ns / 1000000.0, 
-            exec_avg_ns / 1000000.0, 
-            (exec_max_ns - exec_min_ns) / 1000000.0,
-            start_min_ns / 1000000.0, 
-            start_max_ns / 1000000.0, 
-            start_avg_ns / 1000000.0,
-            jitter_ns / 1000000.0,
-            iteration_count
-        );
         
-        // Automatic Joining of Thread in destructor invoked here
     }
-    
+
+    void logStatistics()
+    {
+        if (_executionCount == 0)
+        {
+            std::cout << "No execution data for service with period " << _period << "\n";
+            return;
+        }
+
+        double avgExecTime = _totalExecTime / _executionCount;
+        double execJitter = _maxExecTime - _minExecTime;
+        double startJitter = _maxStartJitter - _minStartJitter;
+
+        std::cout << "Service Stats (Period: " << _period << " ms):\n";
+        std::cout << "Service Name " << service_name.c_str() << "\n";
+        std::cout << "  Min Execution Time: " << _minExecTime << " ms\n";
+        std::cout << "  Max Execution Time: " << _maxExecTime << " ms\n";
+        std::cout << "  Avg Execution Time: " << avgExecTime << " ms\n";
+        std::cout << "  Execution Time Jitter: " << execJitter << " ms\n";
+        std::cout << "  Min Start Time Jitter: " << _minStartJitter << " ms\n";
+        std::cout << "  Max Start Time Jitter: " << _maxStartJitter << " ms\n";
+        std::cout << "  Start Time Jitter: " << startJitter << " ms\n";
+    }
 };
+ 
 
 
-class Sequencer {
+
+
+
+// The sequencer class contains the services set and manages
+// starting/stopping the services. While the services are running,
+// the sequencer releases each service at the requisite timepoint.
+
+class Sequencer
+{
 public:
     template<typename... Args>
-    void addService(std::string name, Args&&... args)
+    void addService(Args&&... args)
     {
-        _services.emplace_back(name, std::forward<Args>(args)...);
+        _services.emplace_back(std::make_unique<Service>(std::forward<Args>(args)...));
+        
     }
 
     void startServices()
     {
-        _running.store(true, std::memory_order_relaxed);
-        _timer = std::jthread(&Sequencer::_runTimer, this);
+        for (auto& svc : _services) {
+            timer_t timerId;
+
+            struct sigevent sev{};
+            sev.sigev_notify = SIGEV_THREAD;
+            sev.sigev_value.sival_ptr = svc.get();
+            sev.sigev_notify_function = [](union sigval val) {
+                auto* s = static_cast<Service*>(val.sival_ptr);
+                s->release();
+            };
+
+            if (timer_create(CLOCK_REALTIME, &sev, &timerId) != 0) {
+                perror("Failed to create timer");
+                continue;
+            }
+
+            // Set periodic interval based on svc.getPeriod()
+            struct itimerspec its{};
+            int period_ms = svc->getPeriod();
+
+            its.it_value.tv_sec = period_ms / 1000;
+            its.it_value.tv_nsec = (period_ms % 1000) * 1'000'000;
+            its.it_interval = its.it_value; // make it periodic
+
+            if (timer_settime(timerId, 0, &its, nullptr) != 0) {
+                perror("Failed to start timer");
+                timer_delete(timerId); // clean up if failed
+                continue;
+            }
+
+            _timerIds.push_back(timerId);
+        }
     }
 
     void stopServices()
     {
-        _running.store(false, std::memory_order_relaxed);
-        if (_timer.joinable())
-        {
-            _timer.join();
+        // Stop all timers
+        for (auto& timer : _timerIds) {
+            timer_delete(timer);
         }
-        for (auto& service : _services)
-        {
-            service.stop();
+        _timerIds.clear();
+
+        // Stop all services
+        for (auto& svc : _services) {
+            svc->stop();
         }
     }
+
 private:
-    std::vector<Service> _services;
-    std::jthread _timer;
-    std::atomic<bool> _running{false};
-    void _runTimer()
-    {
-        // Create a vector of service indices, then sort it based on service_period
-        std::vector<std::vector<Service>::iterator> sorted_service_iters;
-        for (auto it = _services.begin(); it != _services.end(); ++it)
-        {
-            sorted_service_iters.push_back(it);
-        }
-        std::sort(sorted_service_iters.begin(), sorted_service_iters.end(),
-                  [](std::vector<Service>::iterator a, std::vector<Service>::iterator b) {
-                      return a->service_period < b->service_period; // Sort by period
-                  });
-    
-        // Store next release times for each service
-        std::vector<struct timespec> next_release_times(sorted_service_iters.size());
-        struct timespec start_time;
-        clock_gettime(CLOCK_MONOTONIC, &start_time);
-    
-        // Initial release for each service and set initial timeout times
-        for (size_t i = 0; i < sorted_service_iters.size(); ++i)
-        {
-            sorted_service_iters[i]->release();
-            next_release_times[i] = start_time;
-            // Add service_period (converted from ms to timespec) to start_time
-            long period_ns = sorted_service_iters[i]->service_period * MS_TO_NS;
-            next_release_times[i].tv_sec += period_ns / NS_PER_SEC;
-            next_release_times[i].tv_nsec += period_ns % NS_PER_SEC;
-            if (next_release_times[i].tv_nsec >= NS_PER_SEC) {
-                next_release_times[i].tv_nsec -= NS_PER_SEC;
-                next_release_times[i].tv_sec += 1;
-            }
-        }
-    
-        std::vector<Service>::iterator next_release_service;
-    
-        // Main loop
-        while (_running) // Assuming _running is a boolean, adjust if atomic
-        {
-            struct timespec current_time, sleep_time, time_to_release;
-            time_to_release.tv_sec = 0;
-            sleep_time.tv_nsec = MAX_SLEEP_MS * MS_TO_NS; // Default max sleep
-            clock_gettime(CLOCK_MONOTONIC, &current_time);
-    
-            // Find the soonest next release time
-            for (size_t i = 0; i < sorted_service_iters.size(); ++i)
-            {
-                auto& service = sorted_service_iters[i];
-                auto& timeout = next_release_times[i];
-    
-                // Calculate time to next release
-                time_to_release.tv_nsec = ((timeout.tv_sec - current_time.tv_sec) * NS_PER_SEC) +
-                                          (timeout.tv_nsec - current_time.tv_nsec);
-                if (time_to_release.tv_nsec < sleep_time.tv_nsec)
-                {
-                    sleep_time = time_to_release;
-                    next_release_service = service;
-                }
-            }
-    
-            // Sleep until the next release time (with a minimum sleep to avoid lockups)
-            if (sleep_time.tv_nsec < 10)
-                sleep_time.tv_nsec = 10; // Minimum sleep time
-            nanosleep(&sleep_time, nullptr);
-    
-            // Check and release the service if it's time
-            clock_gettime(CLOCK_MONOTONIC, &current_time);
-            for (size_t i = 0; i < sorted_service_iters.size(); ++i)
-            {
-                auto& service = sorted_service_iters[i];
-                auto& timeout = next_release_times[i];
-                if ((current_time.tv_sec > timeout.tv_sec) ||
-                    (current_time.tv_sec == timeout.tv_sec && current_time.tv_nsec >= timeout.tv_nsec))
-                {
-                    service->release();
-                    // Calculate next release time
-                    long period_ns = service->service_period * MS_TO_NS;
-                    timeout.tv_sec += period_ns / NS_PER_SEC;
-                    timeout.tv_nsec += period_ns % NS_PER_SEC;
-                    if (timeout.tv_nsec >= NS_PER_SEC) {
-                        timeout.tv_nsec -= NS_PER_SEC;
-                        timeout.tv_sec += 1;
-                    }
-                }
-            }
-        }
-    }
+    std::vector<std::unique_ptr<Service>> _services;
+    std::vector<timer_t> _timerIds;
 };
-
-int _delta_t(struct timespec *stop, struct timespec *start, struct timespec *delta_t)
-{ // Modified from provided Exercise 1 code
-    long dt_sec=stop->tv_sec - start->tv_sec;
-    long dt_nsec=stop->tv_nsec - start->tv_nsec;
-
-    if(dt_nsec >= 0)
-    {
-      delta_t->tv_sec=dt_sec;
-      delta_t->tv_nsec=dt_nsec;
-    }
-    else
-    {
-      delta_t->tv_sec=dt_sec-1;
-      delta_t->tv_nsec=NS_PER_SEC+dt_nsec;
-    }
-
-    return(1);
-}

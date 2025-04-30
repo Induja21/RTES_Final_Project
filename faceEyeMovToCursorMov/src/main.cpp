@@ -48,11 +48,11 @@ int main(int argc, char* argv[])
         initialize_zmq();
 
         // Add services
-        sequencer.addService("cursorTranslationService", cursorTranslationService, 1, 99, 50);
-        sequencer.addService("imageCaptureService", imageCaptureService, 1, 98, 100);
-        sequencer.addService("faceCenterDetectionService", faceCenterDetectionService, 2, 97, 100);
-        sequencer.addService("imageCompressionService", imageCompressionService, 2, 96, 100);
-        sequencer.addService("messageQueueToCsvService", messageQueueToCsvService, 2, 95, 250);
+        sequencer.addService("cursorTranslationService", cursorTranslationService, 0, 99, 50);
+        sequencer.addService("imageCaptureService", imageCaptureService, 0, 98, 100);
+        sequencer.addService("faceCenterDetectionService", faceCenterDetectionService, 0, 97, 100);
+        sequencer.addService("imageCompressionService", imageCompressionService, 1, 96, 100);
+        sequencer.addService("messageQueueToCsvService", messageQueueToCsvService, 1, 95, 250);
 
         // Start services
         sequencer.startServices();
