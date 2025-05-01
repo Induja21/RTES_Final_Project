@@ -4,3 +4,4 @@
 
 // Declaration of the image capture service function
 void imageCaptureService();
+void imageCaptureInit();

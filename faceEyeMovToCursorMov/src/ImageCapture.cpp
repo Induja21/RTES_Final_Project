@@ -19,6 +19,13 @@ static struct v4l2_buffer buffers[NUM_OF_MEM_BUFFERS];
 // Track buffer state (true = dequeued, false = queued)
 static bool buffer_dequeued[NUM_OF_MEM_BUFFERS] = {false};
 
+static int fd = -1;
+static bool cap_initialized = false;
+static void* buffer_starts[NUM_OF_MEM_BUFFERS] = {nullptr};
+static unsigned int buffer_lengths[NUM_OF_MEM_BUFFERS] = {0};
+static int width = 0;
+static int height = 0;
+static unsigned int next_overwrite_index = 0; // Tracks oldest buffer to overwrite
 // Callback to free the buffer after ZMQ is done sending
 void free_buffer(void* data, void* hint) {
     struct BufferContext {
@@ -42,18 +49,8 @@ void free_buffer(void* data, void* hint) {
     
     delete context; // Clean up the context
 }
-
-void imageCaptureService() {
-    static int fd = -1;
-    static bool cap_initialized = false;
-    static void* buffer_starts[NUM_OF_MEM_BUFFERS] = {nullptr};
-    static unsigned int buffer_lengths[NUM_OF_MEM_BUFFERS] = {0};
-    static int width = 0;
-    static int height = 0;
-    static unsigned int next_overwrite_index = 0; // Tracks oldest buffer to overwrite
-
-    // Initialize the camera device
-    if (!cap_initialized) {
+void imageCaptureInit()
+{
         // Open the video device
         fd = open("/dev/video0", O_RDWR | O_NONBLOCK);
         if (fd == -1) {
@@ -150,7 +147,11 @@ void imageCaptureService() {
         }
 
         cap_initialized = true;
-    }
+}
+
+void imageCaptureService() {
+
+
 
     // Non-blocking frame capture
     struct v4l2_buffer buf;

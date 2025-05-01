@@ -45,6 +45,7 @@ int main(int argc, char* argv[])
     // Initialize resources
     try {
         cursorInit();
+        imageCaptureInit();
         initialize_zmq();
 
         // Add services
@@ -52,7 +53,7 @@ int main(int argc, char* argv[])
         sequencer.addService("imageCaptureService", imageCaptureService, 0, 98, 100);
         sequencer.addService("faceCenterDetectionService", faceCenterDetectionService, 0, 97, 100);
         sequencer.addService("imageCompressionService", imageCompressionService, 1, 96, 100);
-        sequencer.addService("messageQueueToCsvService", messageQueueToCsvService, 1, 95, 250);
+        sequencer.addService("messageQueueToCsvService", messageQueueToCsvService,1, 95, 250);
 
         // Start services
         sequencer.startServices();
