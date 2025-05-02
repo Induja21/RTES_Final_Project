@@ -26,14 +26,14 @@ static int fd = 0;
 
 // Structure to hold calibration data
 struct CalibrationData {
-    int left_x;   // Max left turn (replaces FACE_X_MIN)
-    int right_x;  // Max right turn (replaces FACE_X_MAX)
-    int top_y;    // Max up (replaces FACE_Y_MIN)
-    int bottom_y; // Max down (replaces FACE_Y_MAX)
+    int left_x;   
+    int right_x;  
+    int top_y;    
+    int bottom_y; 
 };
 
 // Global calibration data (defaults match original constants)
-static CalibrationData calib_data = {120, 520, 80, 400};
+static CalibrationData calib_data = {0, 0, 0, 0};
 
 // Callback to free the string memory
 void free_string(void* data, void* hint) {
@@ -66,9 +66,16 @@ void loadCalibrationData(const std::string& filename) {
     }
 }
 
-uint8_t cursorInit() {
+uint8_t cursorInit(uint8_t detectiontype) {
     // Load calibration data
-    loadCalibrationData("calibration_face.csv");
+    if(detectiontype == 1)
+    {
+        loadCalibrationData("calibration_face.csv");
+    }
+    else if(detectiontype == 2)
+    {
+        loadCalibrationData("calibration_eye.csv");
+    }
 
     fd = open("/dev/uinput", O_WRONLY | O_NONBLOCK);
     if (fd < 0) {
@@ -126,7 +133,7 @@ void cursorTranslationService() {
 
         // Parse the face center coordinates
         int x, y;
-        if (sscanf(received_str.c_str(), "FaceCenter:%d,%d", &x, &y) == 2) {
+        if (sscanf(received_str.c_str(), "Center:%d,%d", &x, &y) == 2) {
             // Invert x-coordinate to correct for mirrored camera image
             x = CAMERA_X - x;
 
@@ -179,7 +186,7 @@ void cursorTranslationService() {
 
             // Create the string message dynamically
             char buffer[100];
-            snprintf(buffer, sizeof(buffer), "Face: %d x %d ,Cursor: %d x %d", x, y, display_x, display_y);
+            snprintf(buffer, sizeof(buffer), "Center: %d x %d ,Cursor: %d x %d", x, y, display_x, display_y);
             size_t len = strlen(buffer) + 1; // Include null terminator
             char* msg_str = new char[len];
             strncpy(msg_str, buffer, len);

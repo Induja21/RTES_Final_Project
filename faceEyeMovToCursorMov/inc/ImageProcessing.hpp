@@ -16,5 +16,7 @@
 
 void faceCenterDetectionService();
 void initFaceCenterService();
+void initImageProcessingService(int type);
+void DetectionService(void);
 
 #endif // EYE_DETECTION_HPP

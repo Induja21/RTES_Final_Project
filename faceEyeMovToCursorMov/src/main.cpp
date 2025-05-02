@@ -38,25 +38,41 @@ int main(int argc, char* argv[])
         std::cerr << "Error: Failed to install SIGINT handler\n";
         return 1;
     }
+    
+    if (argc < 2) {
+        std::cerr << "Detection Type: " << argv[0] << " <method_number>\n"
+                  << "Where <method_number> corresponds to the detection type:\n"
+                  << "  1: Face Detection\n"
+                  << "  2: Eye Detection\n";
+        return 1;
+    }
+
+    int detection_type = std::stoi(argv[1]);
+    if (detection_type > 2) {
+        std::cerr << "Invalid input. Please enter 1 (Face Detection), 2 (Eye Detection)\n";
+        return 1;
+    }
+    
+
 
     // Declare sequencer outside try block to ensure scope in catch
     Sequencer sequencer;
 
     // Initialize resources
     try {
-        cursorInit();
+        cursorInit(detection_type);
+		initImageProcessingService(detection_type);
         imageCaptureInit();
         initialize_zmq();
         initCompressionService();
-        initFaceCenterService();
         initLoggingService();
 
         // Add services
         sequencer.addService("cursorTranslationService", cursorTranslationService, 0, 99, 50);
         sequencer.addService("imageCaptureService", imageCaptureService, 0, 98, 100);
-        sequencer.addService("faceCenterDetectionService", faceCenterDetectionService, 0, 97, 100);
-        sequencer.addService("imageCompressionService", imageCompressionService, 1, 96, 100);
-        sequencer.addService("messageQueueToCsvService", messageQueueToCsvService,1, 95, 250);
+        sequencer.addService("DetectionService", DetectionService, 0, 97, 100);
+        sequencer.addService("imageCompressionService", imageCompressionService, 1, 99, 100);
+        sequencer.addService("messageQueueToCsvService", messageQueueToCsvService, 1, 98, 250);
 
         // Start services
         sequencer.startServices();
