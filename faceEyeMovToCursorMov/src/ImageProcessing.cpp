@@ -9,30 +9,9 @@ using namespace std;
 extern zmq::socket_t zmq_sub_socket_face; // ZMQ subscriber socket for frame input
 extern zmq::socket_t zmq_push_face_socket; // ZMQ push socket to send face center
 
-int delta_t(struct timespec *stop, struct timespec *start, struct timespec *delta_t) {
-    int dt_sec = stop->tv_sec - start->tv_sec;
-    int dt_nsec = stop->tv_nsec - start->tv_nsec;
 
-    if (dt_sec >= 0) {
-        if (dt_nsec >= 0) {
-            delta_t->tv_sec = dt_sec;
-            delta_t->tv_nsec = dt_nsec;
-        } else {
-            delta_t->tv_sec = dt_sec - 1;
-            delta_t->tv_nsec = NSEC_PER_SEC + dt_nsec;
-        }
-    } else {
-        if (dt_nsec >= 0) {
-            delta_t->tv_sec = dt_sec;
-            delta_t->tv_nsec = dt_nsec;
-        } else {
-            delta_t->tv_sec = dt_sec - 1;
-            delta_t->tv_nsec = NSEC_PER_SEC + dt_nsec;
-        }
-    }
-    return 1;
-}
-
+static CascadeClassifier faceCascade;
+static bool initialized = false;
 void faceCenterDetection(Mat& frame, CascadeClassifier& faceCascade, Point& faceCenter) {
     Mat grayImage;
     cvtColor(frame, grayImage, COLOR_BGR2GRAY);
@@ -65,9 +44,18 @@ void faceCenterDetection(Mat& frame, CascadeClassifier& faceCascade, Point& face
     circle(frame, faceCenter, radius, Scalar(0, 0, 255), 2);
 }
 
+void initFaceCenterService()
+{
+    if (!initialized) {
+        if (!faceCascade.load("/usr/share/opencv4/haarcascades/haarcascade_frontalface_alt.xml")) {
+            cerr << "Failed to load face cascade classifier" << endl;
+            return;
+        }
+        initialized = true;
+    }
+
+}
 void faceCenterDetectionService() {
-    static bool initialized = false;
-    static CascadeClassifier faceCascade;
 
     // Initialize face classifier
     if (!initialized) {
@@ -144,11 +132,8 @@ void faceCenterDetectionService() {
         struct timespec finish_time = {0, 0};
         struct timespec thread_dt = {0, 0};
 
-        clock_gettime(CLOCK_MONOTONIC, &start_time);
         Point faceCenter;
         faceCenterDetection(frame, faceCascade, faceCenter);
-        clock_gettime(CLOCK_MONOTONIC, &finish_time);
-        delta_t(&finish_time, &start_time, &thread_dt);
 
         // Send face center coordinates via ZeroMQ
         if (faceCenter.x >= 0 && faceCenter.y >= 0) {

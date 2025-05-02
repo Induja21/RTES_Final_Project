@@ -47,6 +47,8 @@ int main(int argc, char* argv[])
         cursorInit();
         imageCaptureInit();
         initialize_zmq();
+        initCompressionService();
+        initFaceCenterService();
 
         // Add services
         sequencer.addService("cursorTranslationService", cursorTranslationService, 0, 99, 50);

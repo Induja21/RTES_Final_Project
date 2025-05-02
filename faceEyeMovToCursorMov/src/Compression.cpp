@@ -10,17 +10,35 @@
 #include <zmq.hpp>
 
 extern zmq::socket_t zmq_sub_socket_compress; // Changed to sub socket
+static bool folder_initialized = false;
+
+// Metadata info
+struct FrameMetadata {
+    int width;
+    int height;
+    uint32_t format;
+    size_t data_size;
+};
+
+void initCompressionService()
+{
+    std::filesystem::create_directory("images");
+    folder_initialized = true;
+}
 
 void imageCompressionService() {
-    static bool folder_initialized = false;
-    if (!folder_initialized) {
-        std::filesystem::create_directory("images");
-        folder_initialized = true;
-    }
+
+    // Compress the image to JPEG
+    std::vector<unsigned char> compressed_data;
+    std::vector<int> compression_params = {cv::IMWRITE_JPEG_QUALITY, 80};
+    // Receive the metadata (first part of the multi-part message)
+    zmq::message_t metadata_msg;
+    FrameMetadata metadata;
+    // Receive the raw frame data (second part)
+    zmq::message_t frame_msg;
 
     while (true) {
-        // Receive the metadata (first part of the multi-part message)
-        zmq::message_t metadata_msg;
+
         if (!zmq_sub_socket_compress.recv(metadata_msg, zmq::recv_flags::dontwait)) {
             break; // No message available, exit loop
         }
@@ -31,18 +49,12 @@ void imageCompressionService() {
             continue;
         }
 
-        // Extract metadata
-        struct FrameMetadata {
-            int width;
-            int height;
-            uint32_t format;
-            size_t data_size;
-        };
+
         if (metadata_msg.size() != sizeof(FrameMetadata)) {
             std::fputs("Invalid metadata size received\n", stderr);
             continue;
         }
-        FrameMetadata metadata;
+
         memcpy(&metadata, metadata_msg.data(), sizeof(FrameMetadata));
 
         // Verify format
@@ -51,8 +63,7 @@ void imageCompressionService() {
             continue;
         }
 
-        // Receive the raw frame data (second part)
-        zmq::message_t frame_msg;
+
         if (!zmq_sub_socket_compress.recv(frame_msg, zmq::recv_flags::dontwait)) {
             std::fputs("Failed to receive frame data\n", stderr);
             continue;
@@ -78,9 +89,7 @@ void imageCompressionService() {
             continue;
         }
 
-        // Compress the image to JPEG
-        std::vector<unsigned char> compressed_data;
-        std::vector<int> compression_params = {cv::IMWRITE_JPEG_QUALITY, 80};
+
         if (!cv::imencode(".jpg", image, compressed_data, compression_params)) {
             std::fputs("Failed to compress image\n", stderr);
             continue;

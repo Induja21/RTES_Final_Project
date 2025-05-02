@@ -4,3 +4,5 @@
 
 // Image compression service function
 void imageCompressionService();
+
+void initCompressionService();

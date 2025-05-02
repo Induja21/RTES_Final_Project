@@ -15,5 +15,6 @@
 #define NSEC_PER_MICROSEC (1000)
 
 void faceCenterDetectionService();
+void initFaceCenterService();
 
 #endif // EYE_DETECTION_HPP
