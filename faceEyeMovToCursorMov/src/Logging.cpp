@@ -12,27 +12,32 @@ static std::ofstream csv_file;
 static std::string csv_filename;
 static bool initialized = false;
 
+void initLoggingService()
+{
+    struct timespec now;
+    clock_gettime(CLOCK_REALTIME, &now);  // Use CLOCK_REALTIME for correct date/time
+    std::time_t sec = now.tv_sec;
+    std::stringstream filename;
+    filename << "data_" << std::put_time(std::localtime(&sec), "%Y-%m-%dT%H-%M-%S") << ".csv";
+    csv_filename = filename.str();
+
+    {
+        std::lock_guard<std::mutex> lock(csv_mutex);
+        csv_file.open(csv_filename, std::ios::app);
+        if (!csv_file.is_open()) {
+            std::string error_message = "Failed to open CSV file: " + csv_filename;
+            std::puts(error_message.c_str());
+            return;
+        }
+        csv_file << "timestamp,data\n";
+    }
+    initialized = true;
+}
+
 void messageQueueToCsvService() {
     // Initialize CSV file with timestamp in filename if not already done
     if (!initialized) {
-        struct timespec now;
-        clock_gettime(CLOCK_REALTIME, &now);  // Use CLOCK_REALTIME for correct date/time
-        std::time_t sec = now.tv_sec;
-        std::stringstream filename;
-        filename << "data_" << std::put_time(std::localtime(&sec), "%Y-%m-%dT%H-%M-%S") << ".csv";
-        csv_filename = filename.str();
-
-        {
-            std::lock_guard<std::mutex> lock(csv_mutex);
-            csv_file.open(csv_filename, std::ios::app);
-            if (!csv_file.is_open()) {
-                std::string error_message = "Failed to open CSV file: " + csv_filename;
-                std::puts(error_message.c_str());
-                return;
-            }
-            csv_file << "timestamp,data\n";
-        }
-        initialized = true;
+        initLoggingService();
     }
 
     // Get current timestamp for record

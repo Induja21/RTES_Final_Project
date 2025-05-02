@@ -127,10 +127,6 @@ void faceCenterDetectionService() {
             continue;
         }
 
-        // Perform face center detection
-        struct timespec start_time = {0, 0};
-        struct timespec finish_time = {0, 0};
-        struct timespec thread_dt = {0, 0};
 
         Point faceCenter;
         faceCenterDetection(frame, faceCascade, faceCenter);

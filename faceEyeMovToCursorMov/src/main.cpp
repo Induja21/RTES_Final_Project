@@ -49,6 +49,7 @@ int main(int argc, char* argv[])
         initialize_zmq();
         initCompressionService();
         initFaceCenterService();
+        initLoggingService();
 
         // Add services
         sequencer.addService("cursorTranslationService", cursorTranslationService, 0, 99, 50);
