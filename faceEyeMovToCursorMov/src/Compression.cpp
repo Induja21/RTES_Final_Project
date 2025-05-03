@@ -11,7 +11,7 @@
 
 extern zmq::socket_t zmq_sub_socket_compress; // Changed to sub socket
 static bool folder_initialized = false;
-
+static constexpr uint8_t IMAGE_QUALITY =80;
 // Metadata info
 struct FrameMetadata {
     int width;
@@ -30,7 +30,7 @@ void imageCompressionService() {
 
     // Compress the image to JPEG
     std::vector<unsigned char> compressed_data;
-    std::vector<int> compression_params = {cv::IMWRITE_JPEG_QUALITY, 80};
+    std::vector<int> compression_params = {cv::IMWRITE_JPEG_QUALITY, IMAGE_QUALITY};
     // Receive the metadata (first part of the multi-part message)
     zmq::message_t metadata_msg;
     FrameMetadata metadata;

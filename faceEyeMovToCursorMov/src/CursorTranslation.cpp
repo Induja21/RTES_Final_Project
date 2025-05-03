@@ -14,15 +14,15 @@
 
 static int message_counter = 0;
 static int fd = 0;
-#define DISPLAY_X 1920
-#define DISPLAY_Y 1080
-#define CAMERA_X 640 // Camera width
-#define CAMERA_Y 480 // Camera height
-#define FACE_X_MIN 120 // Min x-coordinate for 60 deg left (after inversion)
-#define FACE_X_MAX 520 // Max x-coordinate for 60 deg right (after inversion)
-#define FACE_Y_MIN 80  // Min y-coordinate for 60 deg up
-#define FACE_Y_MAX 400 // Max y-coordinate for 60 deg down
-#define SMOOTHING_WINDOW 5 // Number of frames for moving average
+static constexpr int DISPLAY_X=1920;
+static constexpr int DISPLAY_Y=1080;
+static constexpr int CAMERA_X=640; // Camera width
+static constexpr int CAMERA_Y=480; // Camera height
+static constexpr int FACE_X_MIN=120 ;// Min x-coordinate for 60 deg left (after inversion)
+static constexpr int FACE_X_MAX=520; // Max x-coordinate for 60 deg right (after inversion)
+static constexpr int FACE_Y_MIN=80 ; // Min y-coordinate for 60 deg up
+static constexpr int FACE_Y_MAX=400 ;// Max y-coordinate for 60 deg down
+static constexpr int SMOOTHING_WINDOW=5 ;// Number of frames for moving average
 
 // Structure to hold calibration data
 struct CalibrationData {

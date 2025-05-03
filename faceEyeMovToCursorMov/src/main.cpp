@@ -23,6 +23,17 @@
 #include "MessageQueue.hpp"
 #include "ImageProcessing.hpp"
 
+static constexpr uint8_t CURSOR_TRANSLATION_PRIORITY= 99;
+static constexpr uint8_t IMAGE_CAPTURE_PRIORITY= 98;
+static constexpr uint8_t FACE_EYE_DETECTION_PRIORITY= 97;
+static constexpr uint8_t IMAGE_COMPRESSION_PRIORITY= 99;
+static constexpr uint8_t LOGGING_PRIORITY= 98;
+
+static constexpr uint8_t CURSOR_TRANSLATION_DEADLINE= 50;
+static constexpr uint8_t IMAGE_CAPTURE_DEADLINE= 60;
+static constexpr uint8_t FACE_EYE_DETECTION_DEADLINE= 100;
+static constexpr uint8_t IMAGE_COMPRESSION_DEADLINE= 70;
+static constexpr uint8_t LOGGING_DEADLINE= 250;
 std::atomic<bool> _runningstate{true};
 
 void signalHandler(int signum)
@@ -68,11 +79,11 @@ int main(int argc, char* argv[])
         initLoggingService();
 
         // Add services
-        sequencer.addService("cursorTranslationService", cursorTranslationService, 0, 99, 50);
-        sequencer.addService("imageCaptureService", imageCaptureService, 0, 98, 100);
-        sequencer.addService("DetectionService", DetectionService, 0, 97, 100);
-        sequencer.addService("imageCompressionService", imageCompressionService, 1, 99, 100);
-        sequencer.addService("messageQueueToCsvService", messageQueueToCsvService, 1, 98, 250);
+        sequencer.addService("cursorTranslationService", cursorTranslationService, 0, CURSOR_TRANSLATION_PRIORITY, CURSOR_TRANSLATION_DEADLINE);
+        sequencer.addService("imageCaptureService", imageCaptureService, 0, IMAGE_CAPTURE_PRIORITY, IMAGE_CAPTURE_DEADLINE);
+        sequencer.addService("DetectionService", DetectionService, 0, FACE_EYE_DETECTION_PRIORITY, FACE_EYE_DETECTION_DEADLINE);
+        sequencer.addService("imageCompressionService", imageCompressionService, 1, IMAGE_COMPRESSION_PRIORITY, IMAGE_COMPRESSION_DEADLINE);
+        sequencer.addService("messageQueueToCsvService", messageQueueToCsvService, 1, LOGGING_PRIORITY, LOGGING_DEADLINE);
 
         // Start services
         sequencer.startServices();
