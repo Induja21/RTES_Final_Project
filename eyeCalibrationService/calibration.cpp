@@ -125,13 +125,15 @@ void detectEyeCenter(cv::Mat& frame, cv::CascadeClassifier& faceCascade, cv::Cas
     
     if (circles.size()>0) {
         Vec3f eyeball = eyeBallDetection(eye, circles);
-        eyeCenter = cv::Point(cvRound(eyeball[0]), cvRound(eyeball[1]));
-        centers.push_back(eyeCenter);
-        eyeCenter = makeStable(centers, 5);
+        cv::Point eyeCenters = cv::Point(cvRound(eyeball[0]), cvRound(eyeball[1]));
+        centers.push_back(eyeCenters);
+        eyeCenters = makeStable(centers, 5);
         track_Eyeball = eyeCenter;
         int radius = (int)eyeball[2];
-        circle(frame, faces[0].tl() + eyeRect.tl() + eyeCenter, radius, Scalar(0, 0, 255), 2);
-        circle(eye, eyeCenter, radius, Scalar(255, 255, 255), 2);
+        //eyeCenter = faces[0].tl() + eyeRect.tl() + eyeCenters;
+        eyeCenter = eyeCenters;
+        circle(frame, faces[0].tl() + eyeRect.tl() + eyeCenters, radius, Scalar(0, 0, 255), 2);
+        circle(eye, eyeCenters, radius, Scalar(255, 255, 255), 2);
         
     }
 }
